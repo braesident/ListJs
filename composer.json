@@ -1,0 +1,19 @@
+{
+  "name": "braesident/dropdown",
+  "description": "Dropdown for Bootstrap",
+  "homepage": "https://www.exunova.de",
+  "type": "extension",
+  "require": {
+  },
+  "license": "proprietary",
+  "autoload": {
+  },
+  "authors": [
+    {
+      "name": "Sebastian Braesicke",
+      "email": "info@exunova.de",
+      "homepage": "https://www.exunova.de",
+      "role": "Developer"
+    }
+  ]
+}
