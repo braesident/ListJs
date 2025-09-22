@@ -22,6 +22,10 @@ class ListJS {
     this.searchInfos = 0;
     this.valueNames  = [];
     this.handlers    = { updated: [] };
+    this.iterationPlaceholder = '_iterate';
+    this.iterationAttributes = [ 'id', 'for' ];
+    this.iterationStart = 0;
+    this.iterationFormatter = undefined;
 
     // Utils (bound so we can pass around)
     this.utils = {
@@ -749,6 +753,7 @@ class ListJS {
 
     show (item) {
       this.create(item);
+      this._applyIterationPlaceholders(item);
       this.list.list.appendChild(item.elm);
     }
 
@@ -795,6 +800,74 @@ class ListJS {
       if (!this.create(item)) {
         for (const v in values) if (Object.prototype.hasOwnProperty.call(values, v)) {
           this._setValue(item, v, values[v]);
+        }
+      }
+      this._applyIterationPlaceholders(item);
+    }
+
+    _applyIterationPlaceholders (item) {
+      const list = this.list;
+      const placeholderValue = list.iterationPlaceholder;
+      if (!item?.elm) return;
+      const placeholder = typeof placeholderValue === 'string'
+        ? placeholderValue
+        : (placeholderValue != null ? String(placeholderValue) : '');
+      if (!placeholder) return;
+
+      const attrs = Array.isArray(list.iterationAttributes) && list.iterationAttributes.length
+        ? list.iterationAttributes
+        : [ 'id', 'for' ];
+
+      const idx = list.items.indexOf(item);
+      if (idx === -1) return;
+
+      const offsetNumber = Number(list.iterationStart);
+      const offset = Number.isNaN(offsetNumber) ? 0 : offsetNumber;
+
+      const formatter = typeof list.iterationFormatter === 'function'
+        ? list.iterationFormatter
+        : ({ number, placeholder }) => {
+          const leading = placeholder.match(/^[^a-zA-Z0-9]*/)?.[0] ?? '';
+          const trailing = placeholder.match(/[^a-zA-Z0-9]*$/)?.[0] ?? '';
+          return `${leading}${number}${trailing}`;
+        };
+
+      const nodes = [ item.elm ];
+      if (typeof item.elm.querySelectorAll === 'function') {
+        nodes.push(...item.elm.querySelectorAll('*'));
+      }
+
+      const buildValue = (templateValue, attr, element) => {
+        const number = idx + offset;
+        const value = formatter({
+          index: idx,
+          number,
+          base: templateValue,
+          placeholder,
+          attr,
+          element,
+          item,
+          list
+        });
+        return templateValue.split(placeholder).join(String(value ?? ''));
+      };
+
+      for (const node of nodes) {
+        if (!node || typeof node.getAttribute !== 'function') continue;
+        for (const attr of attrs) {
+          if (!node.hasAttribute(attr)) continue;
+
+          const baseKey = `data-listjs-iterate-template-${attr}`;
+          let templateValue = node.getAttribute(baseKey);
+          if (templateValue == null) {
+            const rawValue = node.getAttribute(attr);
+            if (rawValue == null || rawValue.indexOf(placeholder) === -1) continue;
+            templateValue = rawValue;
+            node.setAttribute(baseKey, templateValue);
+          }
+          if (templateValue.indexOf(placeholder) === -1) continue;
+
+          node.setAttribute(attr, buildValue(templateValue, attr, node));
         }
       }
     }
