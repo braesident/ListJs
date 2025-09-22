@@ -1,6 +1,6 @@
 {
-  "name": "braesident/dropdown",
-  "description": "Dropdown for Bootstrap",
+  "name": "braesident/listjs",
+  "description": "The nicest lsit js clone ever",
   "homepage": "https://www.exunova.de",
   "type": "extension",
   "require": {
