@@ -26,6 +26,7 @@ class ListJS {
     this.iterationAttributes = [ 'id', 'for' ];
     this.iterationStart = 0;
     this.iterationFormatter = undefined;
+    this.groupBy = undefined;
 
     // Utils (bound so we can pass around)
     this.utils = {
@@ -195,20 +196,128 @@ class ListJS {
     this.matchingItems = [];
     this.templater.clear();
 
-    for (let i = 0; i < is.length; i++) {
-      if (is[i].matching() && this.matchingItems.length + 1 >= this.i && this.visibleItems.length < this.page) {
-        is[i].show();
-        this.visibleItems.push(is[i]);
-        this.matchingItems.push(is[i]);
-      } else if (is[i].matching()) {
-        this.matchingItems.push(is[i]);
-        is[i].hide();
-      } else {
-        is[i].hide();
+    const groupBy = ListJS._normalizeGroupBy(this.groupBy);
+    if (groupBy.length) {
+      this._updateGrouped(is, groupBy[0]);
+    } else {
+      for (let i = 0; i < is.length; i++) {
+        if (is[i].matching() && this.matchingItems.length + 1 >= this.i && this.visibleItems.length < this.page) {
+          is[i].show();
+          this.visibleItems.push(is[i]);
+          this.matchingItems.push(is[i]);
+        } else if (is[i].matching()) {
+          this.matchingItems.push(is[i]);
+          is[i].hide();
+        } else {
+          is[i].hide();
+        }
       }
     }
     this.trigger('updated');
     return this;
+  }
+
+  _updateGrouped (items, groupBy) {
+    const frag = document.createDocumentFragment();
+    const ctx = {
+      now: new Date(),
+      weekStartsOn: groupBy.weekStartsOn
+    };
+    let lastGroupKey = null;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.matching()) continue;
+
+      const idx = this.matchingItems.length + 1;
+      this.matchingItems.push(item);
+      if (idx < this.i || this.visibleItems.length >= this.page) continue;
+
+      const groupInfo = this._getGroupForItem(item, groupBy, ctx);
+      if (groupInfo) {
+        if (groupInfo.key !== lastGroupKey) {
+          const header = this._createGroupHeader(groupBy, groupInfo);
+          if (header) frag.appendChild(header);
+          lastGroupKey = groupInfo.key;
+        }
+      } else {
+        lastGroupKey = null;
+      }
+
+      this.templater.create(item);
+      this.templater._applyIterationPlaceholders(item);
+      frag.appendChild(item.elm);
+      this.visibleItems.push(item);
+    }
+
+    this.list.appendChild(frag);
+  }
+
+  _getGroupForItem (item, groupBy, ctx) {
+    const values = item.values();
+    const value = (typeof groupBy.name === 'function')
+      ? groupBy.name(item, values, this)
+      : ListJS._getByPath(values, groupBy.name);
+    const groups = groupBy.groups || [];
+
+    if (!groups.length) {
+      if (value === undefined || value === null || value === '') return null;
+      const label = ListJS._toString(value);
+      return { key: label, label };
+    }
+
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      if (group.test && group.test(value, item, this, ctx)) {
+        const key = (group.id !== undefined && group.id !== null) ? group.id : group.label;
+        return { key, label: group.label, group };
+      }
+    }
+
+    if (groupBy.fallback !== undefined && groupBy.fallback !== null) {
+      const fb = groupBy.fallback;
+      if (typeof fb === 'string') return { key: fb, label: fb, group: fb };
+      if (typeof fb === 'object') {
+        const key = fb.id || fb.name || 'other';
+        const label = fb.label || fb.title || fb.name || key;
+        return { key, label, group: fb };
+      }
+    }
+
+    return null;
+  }
+
+  _createGroupHeader (groupBy, info) {
+    const ctx = {
+      label: info.label,
+      key: info.key,
+      group: info.group,
+      list: this
+    };
+    let node;
+    const tag = groupBy.headerTag || this._defaultGroupTag();
+
+    if (typeof groupBy.header === 'function') {
+      node = ListJS._coerceGroupNode(groupBy.header(ctx), tag, info);
+    } else if (groupBy.header !== undefined) {
+      node = ListJS._coerceGroupNode(groupBy.header, tag, info);
+    } else {
+      node = document.createElement(tag);
+      node.textContent = info.label;
+    }
+
+    if (!node) return null;
+    if (groupBy.headerClass && node.classList) node.classList.add(groupBy.headerClass);
+    node.setAttribute('data-listjs-group', 'true');
+    node.setAttribute('data-group', ListJS._toString(info.key ?? ''));
+    return node;
+  }
+
+  _defaultGroupTag () {
+    const tag = this.list?.tagName?.toLowerCase() || '';
+    if (tag === 'tbody' || tag === 'thead' || tag === 'tfoot') return 'tr';
+    if (tag === 'ul' || tag === 'ol') return 'li';
+    return 'div';
   }
 
   // ---------- Build subsystems ----------
@@ -217,7 +326,10 @@ class ListJS {
       const nodes = parent.childNodes;
       const items = [];
       for (let i = 0; i < nodes.length; i++) {
-        if (nodes[i].data === undefined) items.push(nodes[i]); // skip text nodes
+        if (nodes[i].data === undefined) {
+          if (nodes[i].getAttribute && nodes[i].getAttribute('data-listjs-group') === 'true') continue;
+          items.push(nodes[i]);
+        }
       }
       return items;
     };
@@ -1003,6 +1115,157 @@ class ListJS {
     return s.toString();
   }
 
+  static _getByPath (obj, path) {
+    if (!obj || !path) return undefined;
+    if (typeof path !== 'string' || path.indexOf('.') === -1) return obj[path];
+    const parts = path.split('.');
+    let cur = obj;
+    for (let i = 0; i < parts.length; i++) {
+      if (cur == null) return undefined;
+      cur = cur[parts[i]];
+    }
+    return cur;
+  }
+
+  static _createElementFromHTML (html) {
+    if (typeof html !== 'string') return undefined;
+    if (/<tr[\s>]/g.exec(html)) {
+      const tbody = document.createElement('tbody');
+      tbody.innerHTML = html;
+      return tbody.firstElementChild;
+    }
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    return div.firstElementChild;
+  }
+
+  static _coerceGroupNode (input, tag, info) {
+    if (input && input.nodeType) return input.cloneNode(true);
+    if (input === undefined || input === null) return null;
+    const str = ListJS._toString(input).replace(/\{\{label\}\}/g, ListJS._toString(info.label));
+    if (str.indexOf('<') !== -1) return ListJS._createElementFromHTML(str);
+    const node = document.createElement(tag || 'li');
+    node.textContent = str;
+    return node;
+  }
+
+  static _normalizeGroupBy (groupBy) {
+    if (!groupBy) return [];
+    const list = Array.isArray(groupBy) ? groupBy : [ groupBy ];
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const cfg = list[i] || {};
+      const name = cfg.name || cfg.valueName;
+      if (!name && typeof cfg.name !== 'function') continue;
+      out.push({
+        name: cfg.name || cfg.valueName,
+        groups: ListJS._normalizeGroupFilters(cfg.filter || cfg.groups),
+        headerTag: cfg.headerTag || cfg.tag,
+        headerClass: (typeof cfg.headerClass !== 'undefined') ? cfg.headerClass : 'listjs-group',
+        header: cfg.header,
+        fallback: cfg.fallback,
+        weekStartsOn: (typeof cfg.weekStartsOn === 'number') ? cfg.weekStartsOn : 1
+      });
+    }
+    return out;
+  }
+
+  static _normalizeGroupFilters (filter) {
+    if (!filter) return [];
+    const groups = [];
+    if (Array.isArray(filter)) {
+      for (let i = 0; i < filter.length; i++) {
+        const def = ListJS._normalizeGroupDef(filter[i], i);
+        if (def) groups.push(def);
+      }
+    } else if (typeof filter === 'object') {
+      const keys = Object.keys(filter);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const def = ListJS._normalizeGroupDef(filter[key], key);
+        if (def) groups.push(def);
+      }
+    }
+    return groups;
+  }
+
+  static _normalizeGroupDef (def, key) {
+    let id = key;
+    let label;
+    let test;
+
+    if (typeof def === 'function') {
+      test = def;
+      label = ListJS._toString(key);
+    } else if (typeof def === 'string') {
+      label = def;
+    } else if (def && typeof def === 'object') {
+      id = def.id || def.name || key;
+      label = def.label || def.title || def.text || def.name || id;
+      test = def.test || def.filter || def.match;
+    } else if (def !== undefined && def !== null) {
+      label = ListJS._toString(def);
+    } else {
+      return null;
+    }
+
+    if (!id) id = label;
+    const builtIn = ListJS._groupDateTests[id];
+    if (!test && builtIn) test = ListJS._wrapDateTest(builtIn);
+    if (!test) test = value => value == id;
+
+    return {
+      id,
+      label: (label !== undefined && label !== null) ? ListJS._toString(label) : ListJS._toString(id),
+      test
+    };
+  }
+
+  static _wrapDateTest (fn) {
+    return (value, item, list, ctx) => {
+      const date = ListJS._parseDate(value);
+      if (!date) return false;
+      const now = ctx?.now || new Date();
+      const weekStartsOn = (ctx && typeof ctx.weekStartsOn === 'number') ? ctx.weekStartsOn : 1;
+      return fn(date, now, weekStartsOn);
+    };
+  }
+
+  static _parseDate (value) {
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    if (typeof value === 'number') {
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof value === 'string') {
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    return null;
+  }
+
+  static _startOfDay (date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  static _startOfWeek (date, weekStartsOn) {
+    const start = ListJS._startOfDay(date);
+    const day = start.getDay();
+    const offset = (day - weekStartsOn + 7) % 7;
+    start.setDate(start.getDate() - offset);
+    return start;
+  }
+
+  static _isSameDay (a, b) {
+    return a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+  }
+
   static _events = {
     bind (el, type, fn, capture) {
       const list = ListJS._toArray(el);
@@ -1068,6 +1331,37 @@ class ListJS {
     }
     return api;
   }
+
+  static _groupDateTests = {
+    today (date, now) {
+      return ListJS._isSameDay(date, now);
+    },
+    yesterday (date, now) {
+      const startToday = ListJS._startOfDay(now);
+      const startYesterday = new Date(startToday);
+      startYesterday.setDate(startYesterday.getDate() - 1);
+      return date >= startYesterday && date < startToday;
+    },
+    thisWeek (date, now, weekStartsOn) {
+      const startWeek = ListJS._startOfWeek(now, weekStartsOn);
+      const endWeek = new Date(startWeek);
+      endWeek.setDate(endWeek.getDate() + 7);
+      return date >= startWeek && date < endWeek;
+    },
+    thisMonth (date, now) {
+      return date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth();
+    },
+    thisYear (date, now) {
+      return date.getFullYear() === now.getFullYear();
+    },
+    lastYear (date, now) {
+      return date.getFullYear() === now.getFullYear() - 1;
+    },
+    older (date, now) {
+      return date.getFullYear() < now.getFullYear() - 1;
+    }
+  };
 
   // Natural sort with caseInsensitive variant
   static _naturalSort (a, b) {
