@@ -796,8 +796,14 @@ class ListJS {
         for (let i = 0; i < valueNames.length; i++) {
           let elm, valueName = valueNames[i];
           if (valueName.data) {
-            for (let j = 0; j < valueName.data.length; j++) {
-              el.setAttribute('data-' + valueName.data[j], '');
+            const dataList = Array.isArray(valueName.data) ? valueName.data : [ valueName.data ];
+            for (let j = 0; j < dataList.length; j++) {
+              const dataDef = dataList[j];
+              const dataName = (typeof dataDef === 'string')
+                ? dataDef
+                : (dataDef && (dataDef.name || dataDef.key || dataDef.data));
+              if (!dataName) continue;
+              el.setAttribute('data-' + dataName, '');
             }
           } else if (valueName.attr && valueName.name) {
             const listNodes = ListJS._getByClass(el, valueName.name, false);
@@ -886,8 +892,14 @@ class ListJS {
       for (let i = 0; i < valueNames.length; i++) {
         let elm, valueName = valueNames[i];
         if (valueName.data) {
-          for (let j = 0; j < valueName.data.length; j++) {
-            values[valueName.data[j]] = ListJS._getAttribute(item.elm, 'data-' + valueName.data[j]);
+          const dataList = Array.isArray(valueName.data) ? valueName.data : [ valueName.data ];
+          for (let j = 0; j < dataList.length; j++) {
+            const dataDef = dataList[j];
+            const dataName = (typeof dataDef === 'string')
+              ? dataDef
+              : (dataDef && (dataDef.name || dataDef.key || dataDef.data));
+            if (!dataName) continue;
+            values[dataName] = ListJS._getAttribute(item.elm, 'data-' + dataName);
           }
         } else if (valueName.attr && valueName.name) {
           elm = ListJS._getByClass(item.elm, valueName.name, true);
@@ -987,7 +999,7 @@ class ListJS {
     _setValue (item, name, value) {
       const list = this.list;
       const applyFn = (valueName, rawValue) => {
-        if (!valueName || typeof valueName !== 'object' || !valueName.fn) return rawValue;
+        if (!valueName || typeof valueName !== 'object') return rawValue;
         const resolveAlt = (valueName, rawValue) => {
           if (!valueName || typeof valueName !== 'object' || !valueName.alt) return rawValue;
           if (rawValue !== undefined && rawValue !== null && rawValue !== '') return rawValue;
@@ -997,6 +1009,7 @@ class ListJS {
           return rawValue;
         };
         const baseValue = resolveAlt(valueName, rawValue);
+        if (!valueName.fn) return baseValue;
         const params = Array.isArray(valueName.params)
           ? valueName.params
           : (typeof valueName.params !== 'undefined' ? [ valueName.params ] : []);
@@ -1018,7 +1031,21 @@ class ListJS {
           if (!offsetReached) continue;
 
           if (vn.data) {
-            for (let j = 0; j < vn.data.length; j++) if (vn.data[j] === nm) return { data: nm };
+            const dataList = Array.isArray(vn.data) ? vn.data : [ vn.data ];
+            for (let j = 0; j < dataList.length; j++) {
+              const dataDef = dataList[j];
+              const dataName = (typeof dataDef === 'string')
+                ? dataDef
+                : (dataDef && (dataDef.name || dataDef.key || dataDef.data));
+              if (dataName === nm) {
+                if (dataDef && typeof dataDef === 'object') {
+                  const def = { data: dataName };
+                  for (const k in dataDef) def[k] = dataDef[k];
+                  return def;
+                }
+                return { data: dataName };
+              }
+            }
           } else if (vn.attr && vn.name && (vn.name === nm || vn.name.startsWith(nm + '*'))) {
             return vn;
           } else if (vn.class && vn.class === nm) {
