@@ -926,7 +926,41 @@ class ListJS {
           this._setValue(item, v, values[v]);
         }
       }
+      this._applyDerivedValues(item, values);
       this._applyIterationPlaceholders(item);
+    }
+
+    _applyDerivedValues (item, values) {
+      const list = this.list;
+      const vnames = list.valueNames || [];
+      const data = values || {};
+      const hasOwn = Object.prototype.hasOwnProperty;
+
+      for (let i = 0; i < vnames.length; i++) {
+        const vn = vnames[i];
+        if (!vn || typeof vn !== 'object') continue;
+
+        if (vn.data) {
+          const dataList = Array.isArray(vn.data) ? vn.data : [ vn.data ];
+          for (let j = 0; j < dataList.length; j++) {
+            const dataDef = dataList[j];
+            const isObj = dataDef && typeof dataDef === 'object';
+            const dataName = (typeof dataDef === 'string')
+              ? dataDef
+              : (dataDef && (dataDef.name || dataDef.key || dataDef.data));
+            if (!dataName || hasOwn.call(data, dataName)) continue;
+            if (!isObj) continue;
+            if (!dataDef.alt && typeof dataDef.fn !== 'function') continue;
+            this._setValue(item, dataName, undefined);
+          }
+          continue;
+        }
+
+        const targetName = vn.class || vn.value || vn.name;
+        if (!targetName || hasOwn.call(data, targetName)) continue;
+        if (!vn.alt && typeof vn.fn !== 'function') continue;
+        this._setValue(item, targetName, undefined);
+      }
     }
 
     _applyIterationPlaceholders (item) {
