@@ -986,6 +986,29 @@ class ListJS {
 
     _setValue (item, name, value) {
       const list = this.list;
+      const applyFn = (valueName, rawValue) => {
+        if (!valueName || typeof valueName !== 'object' || !valueName.fn) return rawValue;
+        const resolveAlt = (valueName, rawValue) => {
+          if (!valueName || typeof valueName !== 'object' || !valueName.alt) return rawValue;
+          if (rawValue !== undefined && rawValue !== null && rawValue !== '') return rawValue;
+          const alt = valueName.alt;
+          if (typeof alt === 'function') return alt(item, list, valueName);
+          if (typeof alt === 'string') return ListJS._getByPath(item.values(), alt);
+          return rawValue;
+        };
+        const baseValue = resolveAlt(valueName, rawValue);
+        const params = Array.isArray(valueName.params)
+          ? valueName.params
+          : (typeof valueName.params !== 'undefined' ? [ valueName.params ] : []);
+        if (typeof valueName.fn === 'function') {
+          return valueName.fn.apply(null, [ baseValue, item, list, valueName ].concat(params));
+        }
+        if (typeof valueName.fn === 'string' && baseValue != null) {
+          const method = baseValue[valueName.fn];
+          if (typeof method === 'function') return method.apply(baseValue, params);
+        }
+        return baseValue;
+      };
 
       const getValueName = (nm, offset) => {
         let offsetReached = !offset;
@@ -1013,33 +1036,38 @@ class ListJS {
       let valueName;
       while ((valueName = getValueName(name, valueName)) != null) {
         if (valueName.data) {
-          item.elm.setAttribute('data-' + valueName.data, value);
+          const nextValue = applyFn(valueName, value);
+          item.elm.setAttribute('data-' + valueName.data, nextValue);
         } else if (valueName.attr && valueName.name) {
+          const nextValue = applyFn(valueName, value);
           const listNodes = ListJS._getByClass(item.elm, valueName.name, false);
           for (const elm of listNodes) {
             if (elm.getAttribute(valueName.attr) !== '') continue;
-            elm.setAttribute(valueName.attr, (valueName.prefix ?? '') + value);
+            elm.setAttribute(valueName.attr, (valueName.prefix ?? '') + nextValue);
           }
         } else if (valueName.prop && valueName.name) {
+          const nextValue = applyFn(valueName, value);
           const elm = ListJS._getByClass(item.elm, valueName.name, true);
           if (elm) {
             switch (valueName.prop) {
-            case 'checked':  elm.checked  = (value === true || value == 1); break;
-            case 'disabled': elm.disabled = (value === true || value == 1); break;
+            case 'checked':  elm.checked  = (nextValue === true || nextValue == 1); break;
+            case 'disabled': elm.disabled = (nextValue === true || nextValue == 1); break;
             }
           }
         } else if (valueName.class) {
+          const nextValue = applyFn(valueName, value);
           if (valueName.all) {
             const listNodes = ListJS._getByClass(item.elm, valueName.class, false);
-            for (const elm of listNodes) if (elm) elm.innerHTML = value;
+            for (const elm of listNodes) if (elm) elm.innerHTML = nextValue;
           } else {
             const elm = ListJS._getByClass(item.elm, valueName.class, true);
-            if (elm) elm.innerHTML = value;
+            if (elm) elm.innerHTML = nextValue;
           }
         } else if (valueName.value) {
+          const nextValue = applyFn(valueName, value);
           const target = valueName.target ?? valueName.value;
           const elm = ListJS._getByClass(item.elm, target, true);
-          if (elm) elm.value = value;
+          if (elm) elm.value = nextValue;
         } else {
           const elm = ListJS._getByClass(item.elm, valueName, true);
           if (elm) elm.innerHTML = value;
