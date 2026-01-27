@@ -795,6 +795,7 @@ class ListJS {
         el.removeAttribute('id');
         for (let i = 0; i < valueNames.length; i++) {
           let elm, valueName = valueNames[i];
+          if (valueName && typeof valueName === 'object' && valueName.loop) continue;
           if (valueName.data) {
             const dataList = Array.isArray(valueName.data) ? valueName.data : [ valueName.data ];
             for (let j = 0; j < dataList.length; j++) {
@@ -891,6 +892,7 @@ class ListJS {
       const values = {};
       for (let i = 0; i < valueNames.length; i++) {
         let elm, valueName = valueNames[i];
+        if (valueName && typeof valueName === 'object' && valueName.loop) continue;
         if (valueName.data) {
           const dataList = Array.isArray(valueName.data) ? valueName.data : [ valueName.data ];
           for (let j = 0; j < dataList.length; j++) {
@@ -927,6 +929,7 @@ class ListJS {
         }
       }
       this._applyDerivedValues(item, values);
+      this._applyLoops(item, values);
       this._applyIterationPlaceholders(item);
     }
 
@@ -939,6 +942,7 @@ class ListJS {
       for (let i = 0; i < vnames.length; i++) {
         const vn = vnames[i];
         if (!vn || typeof vn !== 'object') continue;
+        if (vn.loop) continue;
 
         if (vn.data) {
           const dataList = Array.isArray(vn.data) ? vn.data : [ vn.data ];
@@ -960,6 +964,254 @@ class ListJS {
         if (!targetName || hasOwn.call(data, targetName)) continue;
         if (!vn.alt && typeof vn.fn !== 'function') continue;
         this._setValue(item, targetName, undefined);
+      }
+    }
+
+    _applyLoops (item, values) {
+      const loops = this._collectLoops();
+      if (!loops.length) return;
+      const dataRoot = values || {};
+
+      for (let i = 0; i < loops.length; i++) {
+        const loop = loops[i];
+        const rawList = ListJS._getByPath(dataRoot, loop.loop);
+        const listValues = Array.isArray(rawList) ? rawList : (rawList ? [ rawList ] : []);
+        const nodes = ListJS._toArray(ListJS._getByClass(item.elm, loop.className, false));
+        if (!nodes.length) continue;
+        const parent = nodes[0].parentNode;
+        if (!parent) continue;
+
+        const anchor = nodes[nodes.length - 1].nextSibling;
+        const template = nodes[0].cloneNode(true);
+        this._resetLoopElement(template, loop.valueNames);
+
+        for (let j = 0; j < nodes.length; j++) parent.removeChild(nodes[j]);
+        if (!listValues.length) continue;
+
+        for (let j = 0; j < listValues.length; j++) {
+          const clone = template.cloneNode(true);
+          const rowValues = this._normalizeLoopItem(listValues[j], loop.valueNames);
+          this._applyLoopValues(clone, loop.valueNames, rowValues, item);
+          parent.insertBefore(clone, anchor);
+        }
+      }
+    }
+
+    _collectLoops () {
+      const list = this.list;
+      const loops = [];
+      const add = def => {
+        const loopDef = this._normalizeLoopDef(def);
+        if (loopDef) loops.push(loopDef);
+      };
+
+      if (list.loop) add(list.loop);
+      if (list.loops) {
+        const defs = Array.isArray(list.loops) ? list.loops : [ list.loops ];
+        for (let i = 0; i < defs.length; i++) add(defs[i]);
+      }
+
+      const vnames = list.valueNames || [];
+      for (let i = 0; i < vnames.length; i++) {
+        const vn = vnames[i];
+        if (vn && typeof vn === 'object' && vn.loop) add(vn);
+      }
+
+      return loops;
+    }
+
+    _normalizeLoopDef (def) {
+      if (!def || typeof def !== 'object') return null;
+      const loopKey = def.loop || def.each;
+      if (!loopKey) return null;
+      let vnames = def.valueNames || def.values || def.valueName || def.value || [];
+      if (!Array.isArray(vnames)) vnames = [ vnames ];
+      return {
+        loop: loopKey,
+        className: def.class || def.target || def.template || def.loopClass || loopKey,
+        valueNames: vnames
+      };
+    }
+
+    _normalizeLoopItem (value, valueNames) {
+      if (value && typeof value === 'object') return value;
+      const primaryKey = this._getLoopPrimaryKey(valueNames);
+      const row = {};
+      if (primaryKey) row[primaryKey] = value;
+      else row.value = value;
+      return row;
+    }
+
+    _getLoopPrimaryKey (valueNames) {
+      for (let i = 0; i < valueNames.length; i++) {
+        const vn = valueNames[i];
+        if (typeof vn === 'string') return vn;
+        if (!vn || typeof vn !== 'object') continue;
+        if (vn.class) return vn.class;
+        if (vn.value) return vn.value;
+        if (vn.name && !vn.attr && !vn.prop) return vn.name;
+      }
+      return null;
+    }
+
+    _getLoopTargets (root, className, all) {
+      const matches = [];
+      if (root.classList && root.classList.contains(className)) matches.push(root);
+      const found = ListJS._toArray(ListJS._getByClass(root, className, false));
+      for (let i = 0; i < found.length; i++) matches.push(found[i]);
+      if (all) return matches;
+      return matches.length ? matches[0] : null;
+    }
+
+    _resetLoopElement (root, valueNames) {
+      for (let i = 0; i < valueNames.length; i++) {
+        const vn = valueNames[i];
+        if (vn && typeof vn === 'object' && vn.loop) continue;
+        if (vn && typeof vn === 'object' && vn.data) {
+          const dataList = Array.isArray(vn.data) ? vn.data : [ vn.data ];
+          for (let j = 0; j < dataList.length; j++) {
+            const dataDef = dataList[j];
+            const dataName = (typeof dataDef === 'string')
+              ? dataDef
+              : (dataDef && (dataDef.name || dataDef.key || dataDef.data));
+            if (!dataName) continue;
+            root.setAttribute('data-' + dataName, '');
+          }
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.attr && vn.name) {
+          const targets = this._getLoopTargets(root, vn.name, true);
+          for (let j = 0; j < targets.length; j++) targets[j].setAttribute(vn.attr, '');
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.prop && vn.name) {
+          const target = this._getLoopTargets(root, vn.name, false);
+          if (target) {
+            switch (vn.prop) {
+            case 'checked':  target.checked = false; break;
+            case 'disabled': target.disabled = false; break;
+            }
+          }
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.class) {
+          const targets = this._getLoopTargets(root, vn.class, !!vn.all);
+          if (vn.all) {
+            for (let j = 0; j < targets.length; j++) if (targets[j]) targets[j].innerHTML = '';
+          } else if (targets) {
+            targets.innerHTML = '';
+          }
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.value) {
+          const target = this._getLoopTargets(root, vn.target ?? vn.value, false);
+          if (target) target.value = '';
+          continue;
+        }
+
+        if (typeof vn === 'string') {
+          const target = this._getLoopTargets(root, vn, false);
+          if (target) target.innerHTML = '';
+          else root.innerHTML = '';
+        }
+      }
+    }
+
+    _applyLoopValues (root, valueNames, values, item) {
+      const list = this.list;
+      const applyFn = (valueName, rawValue) => {
+        if (!valueName || typeof valueName !== 'object') return rawValue;
+        const resolveAlt = (valueName, rawValue) => {
+          if (!valueName || typeof valueName !== 'object' || !valueName.alt) return rawValue;
+          if (rawValue !== undefined && rawValue !== null && rawValue !== '') return rawValue;
+          const alt = valueName.alt;
+          if (typeof alt === 'function') return alt(values, item, list, valueName);
+          if (typeof alt === 'string') return ListJS._getByPath(values, alt);
+          return rawValue;
+        };
+        const baseValue = resolveAlt(valueName, rawValue);
+        if (!valueName.fn) return baseValue;
+        const params = Array.isArray(valueName.params)
+          ? valueName.params
+          : (typeof valueName.params !== 'undefined' ? [ valueName.params ] : []);
+        if (typeof valueName.fn === 'function') {
+          return valueName.fn.apply(null, [ baseValue, item, list, valueName, values ].concat(params));
+        }
+        if (typeof valueName.fn === 'string' && baseValue != null) {
+          const method = baseValue[valueName.fn];
+          if (typeof method === 'function') return method.apply(baseValue, params);
+        }
+        return baseValue;
+      };
+
+      for (let i = 0; i < valueNames.length; i++) {
+        const vn = valueNames[i];
+        if (vn && typeof vn === 'object' && vn.loop) continue;
+
+        if (vn && typeof vn === 'object' && vn.data) {
+          const dataList = Array.isArray(vn.data) ? vn.data : [ vn.data ];
+          for (let j = 0; j < dataList.length; j++) {
+            const dataDef = dataList[j];
+            const dataName = (typeof dataDef === 'string')
+              ? dataDef
+              : (dataDef && (dataDef.name || dataDef.key || dataDef.data));
+            if (!dataName) continue;
+            const dataValue = applyFn(dataDef && typeof dataDef === 'object' ? dataDef : vn, values[dataName]);
+            if (dataValue !== undefined) root.setAttribute('data-' + dataName, dataValue);
+          }
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.attr && vn.name) {
+          const nextValue = applyFn(vn, values[vn.name]);
+          const targets = this._getLoopTargets(root, vn.name, true);
+          for (let j = 0; j < targets.length; j++) {
+            if (targets[j].getAttribute(vn.attr) !== '') continue;
+            targets[j].setAttribute(vn.attr, (vn.prefix ?? '') + (nextValue ?? ''));
+          }
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.prop && vn.name) {
+          const nextValue = applyFn(vn, values[vn.name]);
+          const target = this._getLoopTargets(root, vn.name, false);
+          if (target) {
+            switch (vn.prop) {
+            case 'checked':  target.checked  = (nextValue === true || nextValue == 1); break;
+            case 'disabled': target.disabled = (nextValue === true || nextValue == 1); break;
+            }
+          }
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.class) {
+          const nextValue = applyFn(vn, values[vn.class]);
+          const targets = this._getLoopTargets(root, vn.class, !!vn.all);
+          if (vn.all) {
+            for (let j = 0; j < targets.length; j++) if (targets[j]) targets[j].innerHTML = nextValue ?? '';
+          } else if (targets) {
+            targets.innerHTML = nextValue ?? '';
+          }
+          continue;
+        }
+
+        if (vn && typeof vn === 'object' && vn.value) {
+          const nextValue = applyFn(vn, values[vn.value]);
+          const target = this._getLoopTargets(root, vn.target ?? vn.value, false);
+          if (target) target.value = nextValue ?? '';
+          continue;
+        }
+
+        if (typeof vn === 'string') {
+          const nextValue = values[vn];
+          const target = this._getLoopTargets(root, vn, false);
+          if (target) target.innerHTML = nextValue ?? '';
+          else root.innerHTML = nextValue ?? '';
+        }
       }
     }
 
@@ -1063,6 +1315,7 @@ class ListJS {
           const vn = list.valueNames[i];
           if (offset && offset === vn) { offsetReached = true; continue; }
           if (!offsetReached) continue;
+          if (vn && typeof vn === 'object' && vn.loop) continue;
 
           if (vn.data) {
             const dataList = Array.isArray(vn.data) ? vn.data : [ vn.data ];
