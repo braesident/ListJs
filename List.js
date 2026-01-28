@@ -307,7 +307,15 @@ class ListJS {
     }
 
     if (!node) return null;
-    if (groupBy.headerClass && node.classList) node.classList.add(groupBy.headerClass);
+    if (groupBy.headerClass && node.classList) {
+      const classes = Array.isArray(groupBy.headerClass)
+        ? groupBy.headerClass
+        : ListJS._toString(groupBy.headerClass).split(/\s+/);
+      for (let i = 0; i < classes.length; i++) {
+        const cls = classes[i];
+        if (cls) node.classList.add(cls);
+      }
+    }
     node.setAttribute('data-listjs-group', 'true');
     node.setAttribute('data-group', ListJS._toString(info.key ?? ''));
     return node;
