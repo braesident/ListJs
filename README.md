@@ -258,7 +258,10 @@ Hinweise:
   `older` sind eingebaute Datumsgruppen.
 - Die Reihenfolge der Gruppen folgt der Reihenfolge im `filter`-Objekt.
 - Standard-Header-Tag: `li` (UL/OL), `tr` (TBODY/THEAD/TFOOT), sonst `div`.
-- Optional kannst du `header` als String oder Funktion setzen. `{{label}}` wird ersetzt.
+- `headerClass` kann mehrere Klassen enthalten (String mit Leerzeichen oder Array).
+- Optional kannst du `header` als String, Funktion oder Template-ID setzen.
+- `{{label}}`/`{{key}}` werden ersetzt (auch in Attributen). Bei Template-ID wird
+  die `id` im Clone entfernt, um doppelte IDs zu vermeiden.
 
 Beispiel mit Tabellen-Header:
 
@@ -267,6 +270,26 @@ groupBy: [{
   name: 'createdAt',
   filter: { today: 'Heute', older: 'Aelter' },
   header: ({ label }) => `<tr class="listjs-group"><td colspan="5">${label}</td></tr>`
+}]
+```
+
+### Header-Template per ID + Klassen-Mapping
+
+Wenn `{{label}}` wegen SSR (z.B. Smarty) kollidiert, kannst du stattdessen Klassen nutzen:
+
+```html
+<div id="group-header-template" class="listjs-group">
+  <span class="title label"></span>
+  <span class="meta key" data-key=""></span>
+</div>
+```
+
+```js
+groupBy: [{
+  name: 'createdAt',
+  header: 'group-header-template',
+  labelClass: 'label', // Standard: "label"
+  keyClass: 'key'      // Standard: "key" (setzt data-key)
 }]
 ```
 
