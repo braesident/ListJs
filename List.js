@@ -300,7 +300,17 @@ class ListJS {
     if (typeof groupBy.header === 'function') {
       node = ListJS._coerceGroupNode(groupBy.header(ctx), tag, info);
     } else if (groupBy.header !== undefined) {
-      node = ListJS._coerceGroupNode(groupBy.header, tag, info);
+      if (typeof groupBy.header === 'string' && groupBy.header.indexOf('<') === -1) {
+        const tpl = document.getElementById(groupBy.header);
+        if (tpl && tpl.nodeType) {
+          node = tpl.cloneNode(true);
+          if (node.removeAttribute) node.removeAttribute('id');
+          ListJS._applyTemplateVars(node, info, groupBy);
+        }
+        else node = ListJS._coerceGroupNode(groupBy.header, tag, info);
+      } else {
+        node = ListJS._coerceGroupNode(groupBy.header, tag, info);
+      }
     } else {
       node = document.createElement(tag);
       node.textContent = info.label;
@@ -1499,6 +1509,59 @@ class ListJS {
     return node;
   }
 
+  static _applyTemplateVars (root, info, groupBy = {}) {
+    if (!root || !root.nodeType) return root;
+    const vars = {
+      label: ListJS._toString(info.label ?? ''),
+      key: ListJS._toString(info.key ?? '')
+    };
+    const labelClass = ListJS._toString(groupBy.labelClass || groupBy.labelTarget || 'label');
+    const keyClass = ListJS._toString(groupBy.keyClass || groupBy.keyTarget || 'key');
+    const replace = str => {
+      if (str == null) return str;
+      let out = '' + str;
+      out = out.replace(/\{\{label\}\}/g, vars.label);
+      out = out.replace(/\{\{key\}\}/g, vars.key);
+      return out;
+    };
+
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let node = walk.nextNode();
+    while (node) {
+      node.nodeValue = replace(node.nodeValue);
+      node = walk.nextNode();
+    }
+
+    const elements = [ root ];
+    if (root.querySelectorAll) elements.push(...root.querySelectorAll('*'));
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      if (!el || !el.attributes) continue;
+      for (let j = 0; j < el.attributes.length; j++) {
+        const attr = el.attributes[j];
+        if (attr && attr.value && attr.value.indexOf('{{') !== -1) {
+          attr.value = replace(attr.value);
+        }
+      }
+    }
+
+    if (labelClass) {
+      const labelNodes = ListJS._toArray(ListJS._getByClass(root, labelClass, false));
+      for (let i = 0; i < labelNodes.length; i++) {
+        if (labelNodes[i]) labelNodes[i].textContent = vars.label;
+      }
+    }
+    if (keyClass) {
+      const keyNodes = ListJS._toArray(ListJS._getByClass(root, keyClass, false));
+      for (let i = 0; i < keyNodes.length; i++) {
+        const el = keyNodes[i];
+        if (!el) continue;
+        if (el.setAttribute) el.setAttribute('data-key', vars.key);
+      }
+    }
+    return root;
+  }
+
   static _normalizeGroupBy (groupBy) {
     if (!groupBy) return [];
     const list = Array.isArray(groupBy) ? groupBy : [ groupBy ];
@@ -1512,6 +1575,8 @@ class ListJS {
         groups: ListJS._normalizeGroupFilters(cfg.filter || cfg.groups),
         headerTag: cfg.headerTag || cfg.tag,
         headerClass: (typeof cfg.headerClass !== 'undefined') ? cfg.headerClass : 'listjs-group',
+        labelClass: cfg.labelClass || cfg.labelTarget,
+        keyClass: cfg.keyClass || cfg.keyTarget,
         header: cfg.header,
         fallback: cfg.fallback,
         weekStartsOn: (typeof cfg.weekStartsOn === 'number') ? cfg.weekStartsOn : 1
