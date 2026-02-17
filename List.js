@@ -972,7 +972,7 @@ class ListJS {
               : (dataDef && (dataDef.name || dataDef.key || dataDef.data));
             if (!dataName || hasOwn.call(data, dataName)) continue;
             if (!isObj) continue;
-            if (!dataDef.alt && typeof dataDef.fn !== 'function') continue;
+            if (!dataDef.alt && typeof dataDef.fn !== 'function' && !dataDef.concat) continue;
             this._setValue(item, dataName, undefined);
           }
           continue;
@@ -980,7 +980,7 @@ class ListJS {
 
         const targetName = vn.class || vn.value || vn.name;
         if (!targetName || hasOwn.call(data, targetName)) continue;
-        if (!vn.alt && typeof vn.fn !== 'function') continue;
+        if (!vn.alt && typeof vn.fn !== 'function' && !vn.concat) continue;
         this._setValue(item, targetName, undefined);
       }
     }
@@ -1143,15 +1143,25 @@ class ListJS {
       const list = this.list;
       const applyFn = (valueName, rawValue) => {
         if (!valueName || typeof valueName !== 'object') return rawValue;
+        const resolveConcat = (valueName, rawValue) => {
+          if (!valueName || typeof valueName !== 'object' || !valueName.concat) return rawValue;
+          if (!ListJS._isEmptyValue(rawValue) && valueName.concat.force !== true) return rawValue;
+          const concatValue = ListJS._resolveConcatValue(valueName.concat, values);
+          if (valueName.concat && typeof valueName.concat === 'object' && valueName.concat.as) {
+            values[valueName.concat.as] = concatValue;
+          }
+          return concatValue;
+        };
         const resolveAlt = (valueName, rawValue) => {
           if (!valueName || typeof valueName !== 'object' || !valueName.alt) return rawValue;
-          if (rawValue !== undefined && rawValue !== null && rawValue !== '') return rawValue;
+          if (!ListJS._isEmptyValue(rawValue)) return rawValue;
           const alt = valueName.alt;
           if (typeof alt === 'function') return alt(values, item, list, valueName);
           if (typeof alt === 'string') return ListJS._getByPath(values, alt);
           return rawValue;
         };
-        const baseValue = resolveAlt(valueName, rawValue);
+        const concatedValue = resolveConcat(valueName, rawValue);
+        const baseValue = resolveAlt(valueName, concatedValue);
         if (!valueName.fn) return baseValue;
         const params = Array.isArray(valueName.params)
           ? valueName.params
@@ -1304,15 +1314,26 @@ class ListJS {
       const list = this.list;
       const applyFn = (valueName, rawValue) => {
         if (!valueName || typeof valueName !== 'object') return rawValue;
+        const resolveConcat = (valueName, rawValue) => {
+          if (!valueName || typeof valueName !== 'object' || !valueName.concat) return rawValue;
+          if (!ListJS._isEmptyValue(rawValue) && valueName.concat.force !== true) return rawValue;
+          const source = item && typeof item.values === 'function' ? item.values() : {};
+          const concatValue = ListJS._resolveConcatValue(valueName.concat, source);
+          if (valueName.concat && typeof valueName.concat === 'object' && valueName.concat.as && source) {
+            source[valueName.concat.as] = concatValue;
+          }
+          return concatValue;
+        };
         const resolveAlt = (valueName, rawValue) => {
           if (!valueName || typeof valueName !== 'object' || !valueName.alt) return rawValue;
-          if (rawValue !== undefined && rawValue !== null && rawValue !== '') return rawValue;
+          if (!ListJS._isEmptyValue(rawValue)) return rawValue;
           const alt = valueName.alt;
           if (typeof alt === 'function') return alt(item, list, valueName);
           if (typeof alt === 'string') return ListJS._getByPath(item.values(), alt);
           return rawValue;
         };
-        const baseValue = resolveAlt(valueName, rawValue);
+        const concatedValue = resolveConcat(valueName, rawValue);
+        const baseValue = resolveAlt(valueName, concatedValue);
         if (!valueName.fn) return baseValue;
         const params = Array.isArray(valueName.params)
           ? valueName.params
@@ -1473,6 +1494,67 @@ class ListJS {
   static _toString (s) {
     s = (s === undefined || s === null) ? '' : s;
     return s.toString();
+  }
+
+  static _isEmptyValue (value) {
+    return value === undefined || value === null || value === '';
+  }
+
+  static _resolveConcatValue (concat, source) {
+    if (!concat) return undefined;
+    const cfg = Array.isArray(concat) ? { list: concat } : concat;
+    if (!cfg || typeof cfg !== 'object') return undefined;
+
+    let list = cfg.list;
+    if (!Array.isArray(list)) {
+      if (Array.isArray(cfg.fields)) list = cfg.fields;
+      else if (Array.isArray(cfg.keys)) list = cfg.keys;
+      else if (typeof cfg.list === 'string') list = [ cfg.list ];
+      else list = [];
+    }
+    if (!list.length) return undefined;
+
+    const separator = ListJS._toString(
+      (typeof cfg.separator !== 'undefined')
+        ? cfg.separator
+        : ((typeof cfg.sep !== 'undefined') ? cfg.sep : ' ')
+    );
+    const keepEmpty = cfg.keepEmpty === true;
+    const trim = cfg.trim !== false;
+    const values = source || {};
+    const parts = [];
+
+    for (let i = 0; i < list.length; i++) {
+      const key = list[i];
+      let part;
+
+      if (typeof key === 'function') {
+        part = key(values);
+      } else if (typeof key === 'string') {
+        part = ListJS._getByPath(values, key);
+      } else if (key && typeof key === 'object') {
+        if (typeof key.value === 'function') part = key.value(values);
+        else part = ListJS._getByPath(values, key.path || key.key || key.name || key.value);
+      }
+
+      if (Array.isArray(part)) {
+        const arrSep = (typeof cfg.arraySeparator !== 'undefined') ? cfg.arraySeparator : ', ';
+        part = part.join(arrSep);
+      }
+
+      if (part === undefined || part === null) {
+        if (keepEmpty) parts.push('');
+        continue;
+      }
+
+      const str = ListJS._toString(part);
+      if (!keepEmpty && str === '') continue;
+      parts.push(str);
+    }
+
+    let out = parts.join(separator);
+    if (trim) out = out.trim();
+    return out;
   }
 
   static _getByPath (obj, path) {
