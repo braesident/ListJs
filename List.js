@@ -22,6 +22,9 @@ class ListJS {
     this.searchInfos = 0;
     this.valueNames  = [];
     this.handlers    = { updated: [] };
+    this.templateRenderer = undefined;
+    this.templateContext = {};
+    this.templateRendererOptions = undefined;
     this.iterationPlaceholder = '_iterate';
     this.iterationAttributes = [ 'id', 'for' ];
     this.iterationStart = 0;
@@ -161,6 +164,19 @@ class ListJS {
   clear () {
     this.templater.clear();
     this.items = [];
+    return this;
+  }
+
+  setTemplateContext (context = {}, options = {}) {
+    const opts = { refresh: true, ...options };
+    this.templateContext = context ?? {};
+    this._buildTemplater();
+
+    for (let i = 0; i < this.items.length; i++) {
+      this.items[i].elm = undefined;
+    }
+
+    if (opts.refresh) this.update();
     return this;
   }
 
@@ -800,6 +816,42 @@ class ListJS {
         return undefined;
       };
 
+      const resolveTemplateRenderer = () => {
+        const renderer = list.templateRenderer;
+        if (!renderer) return null;
+
+        if (typeof renderer === 'object' && typeof renderer.render === 'function') {
+          return renderer;
+        }
+
+        if (typeof renderer === 'function') {
+          if (renderer.prototype && typeof renderer.prototype.render === 'function') {
+            return new renderer(list.templateRendererOptions || {});
+          }
+          return { render: renderer };
+        }
+
+        return null;
+      };
+
+      const renderItemSource = itemSource => {
+        const renderer = resolveTemplateRenderer();
+        if (!renderer || !itemSource || typeof renderer.render !== 'function') return itemSource;
+
+        const context = (list.templateContext && typeof list.templateContext === 'object')
+          ? list.templateContext
+          : {};
+
+        const tagName = (itemSource.tagName || '').toUpperCase();
+        const template = (tagName === 'TEMPLATE' || tagName === 'SCRIPT')
+          ? (itemSource.innerHTML || '')
+          : (itemSource.outerHTML || '');
+
+        const renderedTemplate = renderer.render(template, context);
+        const renderedSource = getItemSource(renderedTemplate);
+        return renderedSource || itemSource;
+      };
+
       const getFirstListItem = () => {
         const nodes = list.list.childNodes;
         for (let i = 0; i < nodes.length; i++) {
@@ -868,6 +920,7 @@ class ListJS {
         throw new Error('The list needs a template (initial item or string template).');
       }
       if (typeof list.item !== 'function') {
+        itemSource = renderItemSource(itemSource);
         itemSource = createCleanTemplateItem(itemSource, list.valueNames);
         createItem = () => itemSource.cloneNode(true);
       }
