@@ -795,6 +795,8 @@ class ListJS {
   static _Templater = class {
     constructor (list) {
       this.list = list;
+      this._classAttrIds = new WeakMap();
+      this._classAttrCounter = 0;
       this._init();
     }
 
@@ -879,6 +881,7 @@ class ListJS {
           } else if (valueName.attr && valueName.name) {
             const listNodes = ListJS._getByClass(el, valueName.name, false);
             for (const node of listNodes) {
+              if (valueName.classAttr === true && valueName.attr === 'class') continue;
               if (node.getAttribute(valueName.attr) === '[attrBlocked]') {
                 node.removeAttribute(valueName.attr);
                 continue;
@@ -1160,6 +1163,7 @@ class ListJS {
 
         if (vn && typeof vn === 'object' && vn.attr && vn.name) {
           const targets = this._getLoopTargets(root, vn.name, true);
+          if (this._isClassAttrBinding(vn)) continue;
           for (let j = 0; j < targets.length; j++) targets[j].setAttribute(vn.attr, '');
           continue;
         }
@@ -1258,6 +1262,13 @@ class ListJS {
           const nextValue = applyFn(vn, values[vn.name]);
           const targets = this._getLoopTargets(root, vn.name, true);
           for (let j = 0; j < targets.length; j++) {
+            if (this._isClassAttrBinding(vn)) {
+              const classValue = ListJS._isEmptyValue(nextValue)
+                ? ''
+                : ((vn.prefix ?? '') + nextValue);
+              this._applyClassAttr(targets[j], vn, classValue);
+              continue;
+            }
             if (targets[j].getAttribute(vn.attr) !== '') continue;
             targets[j].setAttribute(vn.attr, (vn.prefix ?? '') + (nextValue ?? ''));
           }
@@ -1370,6 +1381,51 @@ class ListJS {
       }
     }
 
+    _isClassAttrBinding (valueName) {
+      return !!(valueName && typeof valueName === 'object' &&
+        valueName.classAttr === true && valueName.attr === 'class');
+    }
+
+    _getClassAttrBindingId (valueName) {
+      if (!valueName || typeof valueName !== 'object') return 0;
+      if (!this._classAttrIds.has(valueName)) {
+        this._classAttrCounter += 1;
+        this._classAttrIds.set(valueName, this._classAttrCounter);
+      }
+      return this._classAttrIds.get(valueName) || 0;
+    }
+
+    _applyClassAttr (elm, valueName, value) {
+      if (!elm || !this._isClassAttrBinding(valueName)) return;
+
+      const id = this._getClassAttrBindingId(valueName);
+      const prevKey = `data-listjs-classattr-prev-${id}`;
+      const baseKey = `data-listjs-classattr-base-${id}`;
+      let baseValue = elm.getAttribute(baseKey);
+      if (baseValue == null) {
+        baseValue = elm.getAttribute('class') || '';
+        elm.setAttribute(baseKey, baseValue);
+      }
+
+      const baseTokens = ListJS._splitClassTokens(baseValue);
+      const prevTokens = ListJS._splitClassTokens(elm.getAttribute(prevKey));
+      const nextTokens = ListJS._splitClassTokens(value);
+      const classes = ListJS._classes(elm);
+
+      for (let i = 0; i < prevTokens.length; i++) {
+        const token = prevTokens[i];
+        if (ListJS._indexOf(baseTokens, token) !== -1) continue;
+        classes.remove(token);
+      }
+
+      for (let i = 0; i < nextTokens.length; i++) {
+        classes.add(nextTokens[i]);
+      }
+
+      if (nextTokens.length) elm.setAttribute(prevKey, nextTokens.join(' '));
+      else elm.removeAttribute(prevKey);
+    }
+
     _setValue (item, name, value) {
       const list = this.list;
       const applyFn = (valueName, rawValue) => {
@@ -1455,6 +1511,13 @@ class ListJS {
           const nextValue = applyFn(valueName, value);
           const listNodes = ListJS._getByClass(item.elm, valueName.name, false);
           for (const elm of listNodes) {
+            if (this._isClassAttrBinding(valueName)) {
+              const classValue = ListJS._isEmptyValue(nextValue)
+                ? ''
+                : ((valueName.prefix ?? '') + nextValue);
+              this._applyClassAttr(elm, valueName, classValue);
+              continue;
+            }
             if (elm.getAttribute(valueName.attr) !== '') continue;
             elm.setAttribute(valueName.attr, (valueName.prefix ?? '') + nextValue);
           }
@@ -1554,6 +1617,19 @@ class ListJS {
   static _toString (s) {
     s = (s === undefined || s === null) ? '' : s;
     return s.toString();
+  }
+
+  static _splitClassTokens (value) {
+    if (value === undefined || value === null) return [];
+    const source = Array.isArray(value) ? value.join(' ') : ListJS._toString(value);
+    const raw = source.split(/\s+/);
+    const out = [];
+    for (let i = 0; i < raw.length; i++) {
+      const token = raw[i];
+      if (!token) continue;
+      if (ListJS._indexOf(out, token) === -1) out.push(token);
+    }
+    return out;
   }
 
   static _isEmptyValue (value) {

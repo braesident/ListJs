@@ -81,7 +81,7 @@ valueNames: [
   'name',
   { data: [ 'id', 'role' ] },
   { name: 'link', attr: 'href', prefix: 'mailto:' },
-  { class: 'title' },
+  { class: 'title' [, all: true/false] },
   { value: 'inputValue' },
   { prop: 'checked', name: 'isActive' }
 ]
@@ -94,6 +94,11 @@ Details:
 - `data` kann auch Objekte enthalten, z. B. `{ data: [ { name: 'isRead', fn: v => (v ? 1 : 0) } ] }`.
 - `{ name: 'link', attr: 'href', prefix: 'mailto:' }` setzt `href` auf `.link` und
   hängt optional `prefix` vor den Wert.
+- Für CSS-Klassen ergänzen (statt überschreiben):
+  `{ name: 'icon', attr: 'class', classAttr: true }` auf z. B.
+  `<i class="icon"></i>`.
+  Dadurch bleiben bestehende Klassen erhalten und der neue Wert wird als zusätzliche
+  Klasse(n) gesetzt.
 - `{ value: 'inputValue' }` setzt `element.value` auf dem Element mit Klasse `.inputValue`.
   Mit `{ target: 'my-input' }` kannst du eine andere Klasse als Ziel angeben.
 - `{ prop: 'checked', name: 'isActive' }` setzt eine DOM-Property (`checked`/`disabled`)
