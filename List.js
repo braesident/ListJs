@@ -1231,6 +1231,25 @@ class ListJS {
           ? valueName.params
           : (typeof valueName.params !== 'undefined' ? [ valueName.params ] : []);
         if (typeof valueName.fn === 'function') {
+          const mode = this._resolveFnMode(valueName);
+          if (mode === 'item') {
+            const itemValues = this._resolveFnItemValues(item, values);
+            return valueName.fn.apply(null, [ itemValues, baseValue, item, list, valueName, values ].concat(params));
+          }
+          if (mode === 'listItem') {
+            return valueName.fn.apply(null, [ item, baseValue, item, list, valueName, values ].concat(params));
+          }
+          if (mode === 'context') {
+            const itemValues = this._resolveFnItemValues(item, values);
+            return valueName.fn.apply(null, [ {
+              value: baseValue,
+              item: itemValues,
+              listItem: item,
+              list,
+              valueName,
+              row: values
+            } ].concat(params));
+          }
           return valueName.fn.apply(null, [ baseValue, item, list, valueName, values ].concat(params));
         }
         if (typeof valueName.fn === 'string' && baseValue != null) {
@@ -1426,6 +1445,20 @@ class ListJS {
       else elm.removeAttribute(prevKey);
     }
 
+    _resolveFnMode (valueName) {
+      if (!valueName || typeof valueName !== 'object') return 'value';
+      const mode = valueName.fnArg || valueName.fnInput || valueName.fnMode || 'value';
+      if (mode === 'item' || mode === 'listItem' || mode === 'context') return mode;
+      return 'value';
+    }
+
+    _resolveFnItemValues (item, rowValues) {
+      if (rowValues && typeof rowValues === 'object') return rowValues;
+      if (item && typeof item.values === 'function') return item.values();
+      if (item && typeof item === 'object') return item;
+      return {};
+    }
+
     _setValue (item, name, value) {
       const list = this.list;
       const applyFn = (valueName, rawValue) => {
@@ -1455,6 +1488,24 @@ class ListJS {
           ? valueName.params
           : (typeof valueName.params !== 'undefined' ? [ valueName.params ] : []);
         if (typeof valueName.fn === 'function') {
+          const mode = this._resolveFnMode(valueName);
+          if (mode === 'item') {
+            const itemValues = this._resolveFnItemValues(item);
+            return valueName.fn.apply(null, [ itemValues, baseValue, item, list, valueName ].concat(params));
+          }
+          if (mode === 'listItem') {
+            return valueName.fn.apply(null, [ item, baseValue, item, list, valueName ].concat(params));
+          }
+          if (mode === 'context') {
+            const itemValues = this._resolveFnItemValues(item);
+            return valueName.fn.apply(null, [ {
+              value: baseValue,
+              item: itemValues,
+              listItem: item,
+              list,
+              valueName
+            } ].concat(params));
+          }
           return valueName.fn.apply(null, [ baseValue, item, list, valueName ].concat(params));
         }
         if (typeof valueName.fn === 'string' && baseValue != null) {

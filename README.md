@@ -106,6 +106,10 @@ Details:
 - Optional kannst du pro Eintrag eine Transform-Funktion angeben:
   `{ class: 'preview', fn: (value) => value.substring(0, 100) }`.
   Alternativ: `{ class: 'preview', fn: 'substring', params: [ 0, 100 ] }`.
+  Standard-Signatur ist `fn(value, item, list, valueName, ...)`. `item` ist dabei das ListJS-Item-Objekt.
+  Wenn du das Item als ersten Parameter möchtest, nutze
+  `fnArg: 'item'`, z. B.:
+  `{ class: 'avatar-initials', fnArg: 'item', fn: (item) => CRM.tools.getInitials(item.cName) }`. Hier ist `item` jetzt das Werteobjekt.
   Mit `alt` kannst du auf einen anderen Key fallbacken, falls der Wert leer ist
   (funktioniert auch ohne `fn`):
   `{ class: 'preview', fn: 'substring', params: [ 0, 100 ], alt: 'content' }`.
