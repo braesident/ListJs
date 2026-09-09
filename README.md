@@ -1,6 +1,6 @@
 # ListJS (Standalone ES Class)
 
-Kleine, framework-unabhängige Liste mit Suche, Filter, Sortierung, Pagination und optionaler Fuzzy-Suche.
+Kleine, framework-unabhängige Liste mit Suche, Filter, Sortierung, Pagination, progressivem Lazy Loading und optionaler Fuzzy-Suche.
 Direkt im Browser nutzbar, ohne Bundler oder module.exports.
 
 ## Schnellstart
@@ -63,6 +63,7 @@ Alle Optionen werden auf die Instanz gemerged. Wichtige Optionen:
 - `sortFunction` – Custom Sortierfunktion `(a, b, options) => number`.
 - `alphabet` – Alphabet für natürliche Sortierung.
 - `pagination` – Objekt oder Array von Objekten für Pagination-UI.
+- `lazyLoad` (default: `false`) – Objekt für progressives Rendering (siehe unten); nicht mit `pagination` kombinierbar.
 - `fuzzySearch` – Optionen für die Fuzzy-Suche (siehe unten).
 - `iterationPlaceholder` (default: `_iterate`) – Platzhalter für Attribute (siehe unten).
 - `iterationAttributes` (default: `[ 'id', 'for' ]`) – Attribute mit Platzhalter.
@@ -191,7 +192,7 @@ Hinweise:
 - `upsert(valueName, value, newValues = {}, options = {})` – Aktualisiert den ersten Treffer oder fügt ein Item hinzu; gibt dieses Item zurück. Baut standardmäßig die Liste neu auf.
 - `get(valueName, value)` – Gibt Items als Array zurück.
 - `size()` – Anzahl Items.
-- `clear()` – Entfernt alle Items aus DOM und Liste.
+- `clear()` – Entfernt alle Items aus DOM und Liste und leert auch `visibleItems` und `matchingItems`.
 - `show(i, page)` – Zeigt ab Index `i` (1-based) `page` Items.
 - `reIndex()` – List-Items aus DOM neu einlesen.
 - `toJSON()` – Werte aller Items als Array.
@@ -199,6 +200,9 @@ Hinweise:
 - `filter(fn?)` – Filterfunktion; `undefined` setzt Filter zurück.
 - `sort(valueName | event, options?)` – Sortierung, auch per Click-Handler.
 - `update()` – Rendert den aktuellen Zustand.
+- `loadMore(count?)` – Rendert den nächsten Lazy-Load-Block und gibt die neu sichtbaren Items als Array zurück; ohne aktives Lazy Loading oder weitere Treffer `[]`.
+- `resetLazyLoad(options?)` – Setzt Lazy Loading auf die anfängliche Item-Anzahl zurück; gibt die Instanz zurück.
+- `destroy()` – Trennt Lazy-Load-Observer, entfernt deren Scroll-/Resize-Listener und verwirft ausstehende Fallback-Prüfungen; gibt die Instanz zurück. Entfernt weder Items noch sonstige Such-/Sortier-Listener.
 - `on(event, callback)` / `off(event, callback)`
 - `fuzzySearch(str, columns?)` – Fuzzy-Suche (wenn aktiviert).
 - `reset.search()` / `reset.filter()` – setzt nur Search/Filter-Flags zurück.
@@ -240,7 +244,7 @@ Optionen:
 | --- | --- |
 | `update` | Vollständigen Listenaufbau ausführen. Default: `false` bei `updateBy`, `true` bei `upsert` und `removeBy`. |
 | `trigger` | Ohne vollständigen Listenaufbau trotzdem `updated` auslösen (default: `true`). Bei `removeBy` nur, wenn etwas entfernt wurde. Mit Listenaufbau löst `update()` das Event unabhängig von dieser Option aus. |
-| `notCreate` | Für `updateBy`/`upsert`: Mit `true` kein fehlendes DOM-Element vorzeitig erstellen. Ein anschließendes `update()` erstellt sichtbare Items trotzdem. |
+| `notCreate` | Für `updateBy`/`upsert`: Mit `true` kein fehlendes DOM-Element vorzeitig erstellen. Bei Lazy Loading ist dies für noch nicht erstellte Items bzw. neue Upserts automatisch aktiv. Ein anschließendes `update()` erstellt sichtbare Items trotzdem. |
 | `position` | Für `updateBy`/`upsert`: `'start'` oder `'end'` verschiebt das Item bzw. bestimmt seine Einfügeposition. |
 | `index` | Für `updateBy`/`upsert`: Zielindex ab `0`, begrenzt auf den gültigen Bereich. `position` hat Vorrang. |
 | `prepend` / `append` | Für `updateBy`/`upsert`: `true` als Kurzform für die Position am Anfang bzw. Ende. |
@@ -261,8 +265,10 @@ Registriere Listener mit `list.on(event, fn)`:
 - `filterStart`, `filterComplete`
 - `sortStart`, `sortComplete`
 - `parseComplete`
+- `lazyLoadStart`, `lazyLoadComplete`, `lazyLoadExhausted`
 
-Jeder Listener erhält die Instanz als Argument.
+Jeder Listener erhält die Instanz als erstes Argument. Lazy-Load-Events liefern
+zusätzlich ein Detailobjekt als zweites Argument (siehe unten).
 
 ## Pagination
 
@@ -278,6 +284,102 @@ const list = new ListJS('users', {
 
 Die Pagination nutzt intern eine kleine ListJS-Instanz und erwartet ein Element mit
 Klasse `pagination` im Container.
+
+## Progressives Lazy Loading
+
+Lazy Loading begrenzt zunächst die Anzahl gerenderter Items und erweitert sie beim
+Scrollen blockweise. Alle übergebenen Daten bleiben im Speicher für Suche, Filter,
+Sortierung, `get()`, `size()` und `toJSON()` verfügbar. Es werden keine Daten automatisch
+vom Server geladen; bereits gerenderte Items bleiben beim Weiterscrollen im DOM.
+
+```html
+<div id="lazy-users">
+  <input class="search" placeholder="Suche..." />
+  <div class="scroll-area" style="max-height: 400px; overflow-y: auto;">
+    <ul class="list"></ul>
+  </div>
+</div>
+```
+
+```js
+const lazyUsers = new ListJS('lazy-users', {
+  valueNames: [ 'name', 'email', { data: [ 'id' ] } ],
+  item: '<li><span class="name"></span> <span class="email"></span></li>',
+  lazyLoad: {
+    mode: 'progressive',
+    initialItems: 50,
+    itemsPerLoad: 50,
+    thresholdItems: 10,
+    scrollContainer: '.scroll-area'
+  }
+});
+
+// Hier die vollständigen, bereits geladenen Datensätze übergeben.
+lazyUsers.add([
+  { id: 1, name: 'Ada', email: 'ada@example.com' }
+]);
+
+lazyUsers.on('lazyLoadComplete', (list, detail) => {
+  console.log(`${detail.renderedItems} von ${detail.matchingItems} gerendert`);
+});
+
+// Optional manuell, beispielsweise über einen Mehr-anzeigen-Button:
+lazyUsers.loadMore();   // itemsPerLoad weitere Items
+lazyUsers.loadMore(25); // bis zu 25 weitere Items
+```
+
+| Option | Default | Bedeutung |
+| --- | --- | --- |
+| `mode` | `'progressive'` | Einziger unterstützter Modus. |
+| `initialItems` | `50` | Anfängliche Anzahl gerenderter Items. |
+| `itemsPerLoad` | `50` | Anzahl zusätzlicher Items pro Block. |
+| `thresholdItems` | `10` | Beobachtet das erste der letzten zehn sichtbaren Items; sobald es den Scrollbereich schneidet, wird erweitert. `0` beobachtet das letzte Item. |
+| `scrollContainer` | automatisch | DOM-Element, CSS-Selektor, `window` oder `'window'`. Ohne Angabe wird ab der Liste der nächste Vorfahr einschließlich der Liste mit vertikalem Scroll-Overflow verwendet, sonst das Fenster. |
+
+`lazyLoad: {}` aktiviert die Standardwerte. `false`, `null` oder `undefined`
+deaktivieren Lazy Loading; `true` ist ungültig. Ungültige Zahlen fallen auf die
+Standardwerte zurück. Ein ungültiger oder nicht gefundener Scroll-Selektor führt zu
+einem Fehler. Für die automatische Erkennung zählen `overflow-y: auto`, `scroll`
+und `overlay`.
+
+Lazy Loading darf nicht mit einer gesetzten `pagination`-Option kombiniert werden;
+auch `pagination: false` oder `null` führt zum Fehler. Die Renderanzahl wird durch
+Lazy Loading statt durch `page` bestimmt. `show()` ist daher kein Ersatz für
+`loadMore()` oder `resetLazyLoad()`.
+
+Suche, Filter und Sortierung arbeiten auf allen Items und setzen die Renderanzahl
+auf `initialItems` sowie die Scrollposition an den Anfang zurück. Das gilt auch beim
+Zurücksetzen von Suche oder Filter über `search('')` bzw. `filter()`.
+Gruppierung bleibt nutzbar; Gruppenüberschriften zählen nicht zum Item-Limit.
+Automatisches Erweitern nutzt `IntersectionObserver`, ersatzweise Scroll-/Resize-Events.
+
+```js
+lazyUsers.resetLazyLoad(); // Anfangsanzahl rendern und zum Anfang scrollen
+lazyUsers.resetLazyLoad({ scroll: false }); // Scrollposition beibehalten
+lazyUsers.resetLazyLoad({ update: false, scroll: false });
+lazyUsers.update(); // aufgeschobenen Neuaufbau ausführen
+
+// Beim Abbau der Ansicht Lazy-Load-Beobachtung beenden:
+lazyUsers.destroy();
+```
+
+### Lazy-Load-Events
+
+- `lazyLoadStart` – vor dem Rendern eines zusätzlichen Blocks.
+- `lazyLoadComplete` – nach dessen Rendering; `detail.items` enthält die neu sichtbaren Items.
+- `lazyLoadExhausted` – beim Erreichen der beobachteten Schwelle, wenn alle lokalen
+  Treffer sichtbar sind, oder bei entsprechendem manuellem `loadMore()`.
+  Erfordert ein beobachtetes Item, wird also nicht für eine leere Liste ausgelöst.
+  Mehrfache Meldungen für dieselbe aktive Schwelle werden unterdrückt; nach Verlassen
+  und erneutem Erreichen oder einer Änderung der Liste kann das Event erneut auftreten.
+
+Das Detailobjekt enthält `reason` (`'manual'` oder `'observer'`, auch beim
+Scroll-Fallback), `previousLimit`, `nextLimit`, `renderedItems`, `matchingItems`,
+`remainingItems` und `items`. Die drei Felder mit Item-Anzahlen sind Zahlen;
+`items` ist bei Start und Erschöpfung ein leeres Array. Beim Start beschreibt
+`renderedItems` noch den Zustand vor dem zusätzlichen Rendering.
+`lazyLoadExhausted` bezieht sich nur auf die aktuell lokal verfügbaren Treffer und
+kann als Signal für eigenes Nachladen dienen; neue Daten lassen sich mit `add()` ergänzen.
 
 ## Fuzzy-Suche
 

@@ -1,7 +1,7 @@
 /* ListJS – Standalone ES Class (no bundler, no module.exports)
  * API: new ListJS(containerOrId, options = {}, values?)
- * Methods: add, prepend, remove, removeBy, updateBy, upsert, get, size, clear, show, reIndex, toJSON, on, off, search, filter, sort, update
- * Events: 'updated', 'searchStart', 'searchComplete', 'filterStart', 'filterComplete', 'sortStart', 'sortComplete', 'parseComplete'
+ * Methods: add, prepend, remove, removeBy, updateBy, upsert, get, size, clear, show, reIndex, toJSON, on, off, search, filter, sort, update, loadMore, resetLazyLoad, destroy
+ * Events: 'updated', 'searchStart', 'searchComplete', 'filterStart', 'filterComplete', 'sortStart', 'sortComplete', 'parseComplete', 'lazyLoadStart', 'lazyLoadComplete', 'lazyLoadExhausted'
  */
 class ListJS {
   // ---------- Public API ----------
@@ -21,7 +21,12 @@ class ListJS {
     this.searchDelay = 0;
     this.searchInfos = 0;
     this.valueNames  = [];
-    this.handlers    = { updated: [] };
+    this.handlers    = {
+      updated: [],
+      lazyLoadStart: [],
+      lazyLoadComplete: [],
+      lazyLoadExhausted: []
+    };
     this.templateRenderer = undefined;
     this.templateContext = {};
     this.templateRendererOptions = undefined;
@@ -30,6 +35,17 @@ class ListJS {
     this.iterationStart = 0;
     this.iterationFormatter = undefined;
     this.groupBy = undefined;
+    this.lazyLoad = false;
+    this._lazyLoadConfig = null;
+    this._lazyLoadLimit = 0;
+    this._lazyLoadObserver = null;
+    this._lazyLoadScrollContainer = null;
+    this._lazyLoadObservedTarget = null;
+    this._lazyLoadExhaustedTarget = null;
+    this._lazyLoadFallbackHandler = null;
+    this._lazyLoadFallbackFrame = null;
+    this._lazyLoadRendering = false;
+    this._lazyLoadForceObserve = false;
 
     // Utils (bound so we can pass around)
     this.utils = {
@@ -53,6 +69,13 @@ class ListJS {
 
     // DOM hooks
     this.list = this.utils.getByClass(this.listContainer, this.listClass, true);
+    this._lazyLoadConfig = this._normalizeLazyLoad(this.lazyLoad);
+    if (this._lazyLoadConfig && options.pagination !== undefined) {
+      throw new Error('ListJS options "lazyLoad" and "pagination" cannot be combined.');
+    }
+    if (this._lazyLoadConfig) {
+      this._lazyLoadLimit = this._lazyLoadConfig.initialItems;
+    }
 
     // Build subsystems
     this._buildTemplater();
@@ -81,6 +104,7 @@ class ListJS {
     }
 
     this.update();
+    this._initLazyLoadObserver();
   }
 
   reIndex () {
@@ -89,6 +113,7 @@ class ListJS {
     this.matchingItems = [];
     this.searched = false;
     this.filtered = false;
+    this._markLazyLoadContentChanged();
     this._parseList();
   }
 
@@ -99,6 +124,7 @@ class ListJS {
   add (values, callback) {
     if (!values || values.length === 0) return;
     const addList = (Array.isArray(values) ? values : [ values ]);
+    this._markLazyLoadContentChanged();
 
     if (callback) {
       // Async chunked add for large datasets
@@ -107,7 +133,7 @@ class ListJS {
       const tick = () => {
         const chunk = queue.splice(0, 50);
         chunk.forEach(v => {
-          const notCreate = this.items.length > this.page;
+          const notCreate = this._shouldDeferItemCreation();
           const it = new ListJS._Item(this, v, undefined, notCreate);
           this.items.push(it);
           items.push(it);
@@ -125,7 +151,7 @@ class ListJS {
 
     const added = [];
     for (let i = 0; i < addList.length; i++) {
-      const notCreate = this.items.length > this.page;
+      const notCreate = this._shouldDeferItemCreation();
       const it = new ListJS._Item(this, addList[i], undefined, notCreate);
       this.items.push(it);
       added.push(it);
@@ -143,9 +169,10 @@ class ListJS {
     if (!values || values.length === 0) return;
     const addList = (Array.isArray(values) ? values : [ values ]);
     const added = [];
+    this._markLazyLoadContentChanged();
 
     for (let i = addList.length - 1; i >= 0; i--) {
-      const notCreate = this.items.length > this.page;
+      const notCreate = this._shouldDeferItemCreation();
       const it = new ListJS._Item(this, addList[i], undefined, notCreate);
       this.items.unshift(it);
       added.unshift(it);
@@ -172,6 +199,7 @@ class ListJS {
         found++;
       }
     }
+    if (found > 0) this._markLazyLoadContentChanged();
     this.update();
     return found;
   }
@@ -195,9 +223,11 @@ class ListJS {
       return null;
     }
 
-    const notCreate = options.notCreate === true;
+    const notCreate = options.notCreate === true
+      || (options.notCreate === undefined && this._lazyLoadConfig && item.elm === undefined);
     item.values(newValues, notCreate);
     this._positionItem(item, options);
+    this._markLazyLoadContentChanged();
     if (options.update === true) {
       this.update();
     } else if (options.trigger !== false) {
@@ -229,9 +259,11 @@ class ListJS {
       });
     }
 
-    const notCreate = options.notCreate === true;
+    const notCreate = options.notCreate === true
+      || (options.notCreate === undefined && !!this._lazyLoadConfig);
     const item = new ListJS._Item(this, newValues, undefined, notCreate);
     this.items.splice(this._resolveInsertIndex(options, this.items.length), 0, item);
+    this._markLazyLoadContentChanged();
 
     if (options.update !== false) {
       this.update();
@@ -261,6 +293,7 @@ class ListJS {
       }
     }
 
+    if (found > 0) this._markLazyLoadContentChanged();
 
     if (options.update !== false) {
       this.update();
@@ -327,6 +360,66 @@ class ListJS {
   clear () {
     this.templater.clear();
     this.items = [];
+    this.visibleItems = [];
+    this.matchingItems = [];
+    this._markLazyLoadContentChanged();
+    return this;
+  }
+
+  /**
+   * Renders the next lazy-load block while keeping every item available for data operations.
+   * @param {number} [count] - Optional number of additional items to render.
+   * @returns {Object[]} Newly visible ListJS items.
+   */
+  loadMore (count) {
+    return this._loadMore(count, 'manual');
+  }
+
+  /**
+   * Resets progressive rendering to its initial item count.
+   * @param {Object} [options] - Reset behavior.
+   * @param {boolean} [options.update=true] - Immediately rebuild the rendered list.
+   * @param {boolean} [options.scroll=true] - Move the lazy-load scroll container to the list start.
+   * @returns {ListJS} Current list instance.
+   */
+  resetLazyLoad (options = {}) {
+    if (!this._lazyLoadConfig) return this;
+
+    const opts = { update: true, scroll: true, ...options };
+    this.i = 1;
+    this._lazyLoadLimit = this._lazyLoadConfig.initialItems;
+    this._lazyLoadExhaustedTarget = null;
+    this._lazyLoadForceObserve = true;
+    if (opts.scroll !== false) this._scrollLazyLoadToStart();
+    if (opts.update !== false) this.update();
+    return this;
+  }
+
+  /**
+   * Disconnects lazy-load observers and fallback listeners owned by this list.
+   * @returns {ListJS} Current list instance.
+   */
+  destroy () {
+    if (this._lazyLoadObserver) {
+      this._lazyLoadObserver.disconnect();
+      this._lazyLoadObserver = null;
+    }
+    if (this._lazyLoadFallbackHandler && this._lazyLoadScrollContainer) {
+      const target = this._lazyLoadScrollContainer === window ? window : this._lazyLoadScrollContainer;
+      target.removeEventListener('scroll', this._lazyLoadFallbackHandler);
+      window.removeEventListener('resize', this._lazyLoadFallbackHandler);
+    }
+    if (this._lazyLoadFallbackFrame !== null) {
+      if (typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(this._lazyLoadFallbackFrame);
+      } else {
+        window.clearTimeout(this._lazyLoadFallbackFrame);
+      }
+    }
+    this._lazyLoadFallbackHandler = null;
+    this._lazyLoadFallbackFrame = null;
+    this._lazyLoadObservedTarget = null;
+    this._lazyLoadExhaustedTarget = null;
     return this;
   }
 
@@ -356,10 +449,305 @@ class ListJS {
     return this;
   }
 
-  trigger (event) {
+  trigger (event, detail) {
     const list = this.handlers[event] || [];
-    for (let i = list.length - 1; i >= 0; i--) list[i](this);
+    for (let i = list.length - 1; i >= 0; i--) list[i](this, detail);
     return this;
+  }
+
+  /**
+   * Normalizes progressive lazy-load options.
+   * @param {Object|boolean|null|undefined} options - Raw lazy-load option.
+   * @returns {Object|null} Normalized configuration or null when disabled.
+   */
+  _normalizeLazyLoad (options) {
+    if (options === false || options === undefined || options === null) return null;
+    if (typeof options !== 'object' || Array.isArray(options)) {
+      throw new TypeError('ListJS option "lazyLoad" must be an object.');
+    }
+
+    const mode = options.mode ?? 'progressive';
+    if (mode !== 'progressive') {
+      throw new Error(`ListJS lazy-load mode "${mode}" is not supported.`);
+    }
+
+    const positiveInt = (value, fallback) => {
+      const parsed = Number.parseInt(String(value ?? ''), 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    };
+    const nonNegativeInt = (value, fallback) => {
+      const parsed = Number.parseInt(String(value ?? ''), 10);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+    };
+
+    return {
+      mode,
+      initialItems: positiveInt(options.initialItems, 50),
+      itemsPerLoad: positiveInt(options.itemsPerLoad, 50),
+      thresholdItems: nonNegativeInt(options.thresholdItems, 10),
+      scrollContainer: options.scrollContainer
+    };
+  }
+
+  /**
+   * Checks whether a new item should remain data-only until it enters the render window.
+   * @returns {boolean} True when template creation should be deferred.
+   */
+  _shouldDeferItemCreation () {
+    return this._lazyLoadConfig ? true : this.items.length > this.page;
+  }
+
+  /**
+   * Marks rendered threshold state as stale after a data mutation.
+   * @returns {void}
+   */
+  _markLazyLoadContentChanged () {
+    if (!this._lazyLoadConfig) return;
+    this._lazyLoadForceObserve = true;
+    this._lazyLoadExhaustedTarget = null;
+  }
+
+  /**
+   * Renders an additional lazy-load block.
+   * @param {number} [count] - Optional number of items to render.
+   * @param {string} [reason='manual'] - Load trigger used in event details.
+   * @returns {Object[]} Newly visible ListJS items.
+   */
+  _loadMore (count, reason = 'manual') {
+    if (!this._lazyLoadConfig || this._lazyLoadRendering) return [];
+
+    const increment = Number.parseInt(String(count ?? ''), 10);
+    const itemCount = Number.isFinite(increment) && increment > 0
+      ? increment
+      : this._lazyLoadConfig.itemsPerLoad;
+    const previousVisible = this.visibleItems.slice();
+    const previousLimit = this._lazyLoadLimit;
+    const matchingCount = this.matchingItems.length;
+    if (previousVisible.length >= matchingCount) {
+      this._triggerLazyLoadExhausted(reason);
+      return [];
+    }
+
+    this._lazyLoadLimit = Math.min(matchingCount, previousLimit + itemCount);
+    this._lazyLoadExhaustedTarget = null;
+    const startDetail = this._createLazyLoadDetail({
+      reason,
+      previousLimit,
+      nextLimit: this._lazyLoadLimit,
+      items: []
+    });
+    this.trigger('lazyLoadStart', startDetail);
+
+    this._lazyLoadRendering = true;
+    try {
+      this.update();
+    } finally {
+      this._lazyLoadRendering = false;
+    }
+
+    const previouslyVisible = new Set(previousVisible);
+    const newItems = this.visibleItems.filter(item => !previouslyVisible.has(item));
+    this.trigger('lazyLoadComplete', this._createLazyLoadDetail({
+      reason,
+      previousLimit,
+      nextLimit: this._lazyLoadLimit,
+      items: newItems
+    }));
+    return newItems;
+  }
+
+  /**
+   * Builds one lazy-load event payload.
+   * @param {Object} detail - Additional event values.
+   * @returns {Object} Stable lazy-load state for consumers.
+   */
+  _createLazyLoadDetail (detail = {}) {
+    return {
+      reason: detail.reason ?? 'observer',
+      previousLimit: detail.previousLimit ?? this._lazyLoadLimit,
+      nextLimit: detail.nextLimit ?? this._lazyLoadLimit,
+      renderedItems: this.visibleItems.length,
+      matchingItems: this.matchingItems.length,
+      remainingItems: Math.max(0, this.matchingItems.length - this.visibleItems.length),
+      items: Array.isArray(detail.items) ? detail.items : []
+    };
+  }
+
+  /**
+   * Initializes IntersectionObserver or the scroll-event fallback.
+   * @returns {void}
+   */
+  _initLazyLoadObserver () {
+    if (!this._lazyLoadConfig || !this.list) return;
+
+    this._lazyLoadScrollContainer = this._resolveLazyLoadScrollContainer(
+      this._lazyLoadConfig.scrollContainer
+    );
+
+    if (typeof window.IntersectionObserver === 'function') {
+      this._lazyLoadObserver = new window.IntersectionObserver(entries => {
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i];
+          if (entry.target !== this._lazyLoadObservedTarget) continue;
+          this._handleLazyLoadIntersection(entry.isIntersecting, entry.target);
+        }
+      }, {
+        root: this._lazyLoadScrollContainer === window ? null : this._lazyLoadScrollContainer,
+        threshold: 0
+      });
+    } else {
+      this._lazyLoadFallbackHandler = () => this._scheduleLazyLoadFallbackCheck();
+      const target = this._lazyLoadScrollContainer === window ? window : this._lazyLoadScrollContainer;
+      target.addEventListener('scroll', this._lazyLoadFallbackHandler, { passive: true });
+      window.addEventListener('resize', this._lazyLoadFallbackHandler, { passive: true });
+    }
+
+    this._refreshLazyLoadTrigger();
+  }
+
+  /**
+   * Resolves an explicit or automatic lazy-load scroll container.
+   * @param {HTMLElement|Window|string|undefined} configured - Configured scroll root.
+   * @returns {HTMLElement|Window} Scroll container.
+   */
+  _resolveLazyLoadScrollContainer (configured) {
+    if (configured === window || configured === 'window') return window;
+    if (configured && configured.nodeType === 1) return configured;
+    if (typeof configured === 'string') {
+      let element = null;
+      try {
+        element = this.listContainer.querySelector(configured) || document.querySelector(configured);
+      } catch (error) {
+        throw new Error(`ListJS lazy-load scrollContainer selector is invalid: ${configured}`);
+      }
+      if (!element) {
+        throw new Error(`ListJS lazy-load scrollContainer was not found: ${configured}`);
+      }
+      return element;
+    }
+
+    let element = this.list;
+    while (element && element !== document.body && element !== document.documentElement) {
+      const style = typeof window.getComputedStyle === 'function'
+        ? window.getComputedStyle(element)
+        : null;
+      if (style && /(auto|scroll|overlay)/.test(style.overflowY || '')) return element;
+      element = element.parentElement;
+    }
+    return window;
+  }
+
+  /**
+   * Rebinds the observer to the first item inside the configured threshold zone.
+   * @returns {void}
+   */
+  _refreshLazyLoadTrigger () {
+    if (!this._lazyLoadConfig || (!this._lazyLoadObserver && !this._lazyLoadFallbackHandler)) return;
+
+    let target = null;
+    if (this.visibleItems.length > 0) {
+      const threshold = this._lazyLoadConfig.thresholdItems;
+      const index = threshold > 0
+        ? Math.max(0, this.visibleItems.length - threshold)
+        : this.visibleItems.length - 1;
+      target = this.visibleItems[index]?.elm ?? null;
+    }
+
+    if (target === this._lazyLoadObservedTarget && !this._lazyLoadForceObserve) return;
+    if (this._lazyLoadObserver && this._lazyLoadObservedTarget) {
+      this._lazyLoadObserver.unobserve(this._lazyLoadObservedTarget);
+    }
+
+    this._lazyLoadObservedTarget = target;
+    this._lazyLoadExhaustedTarget = null;
+    this._lazyLoadForceObserve = false;
+    if (!target) return;
+
+    if (this._lazyLoadObserver) {
+      this._lazyLoadObserver.observe(target);
+    } else {
+      this._scheduleLazyLoadFallbackCheck();
+    }
+  }
+
+  /**
+   * Handles an observed threshold item entering or leaving the scroll viewport.
+   * @param {boolean} isIntersecting - Whether the threshold item intersects the scroll root.
+   * @param {Element} target - Observed item element.
+   * @returns {void}
+   */
+  _handleLazyLoadIntersection (isIntersecting, target) {
+    if (target !== this._lazyLoadObservedTarget) return;
+    if (!isIntersecting) {
+      if (this._lazyLoadExhaustedTarget === target) this._lazyLoadExhaustedTarget = null;
+      return;
+    }
+    if (this._lazyLoadRendering) return;
+
+    if (this.visibleItems.length < this.matchingItems.length) {
+      this._lazyLoadExhaustedTarget = null;
+      this._loadMore(undefined, 'observer');
+      return;
+    }
+    this._triggerLazyLoadExhausted('observer');
+  }
+
+  /**
+   * Emits local exhaustion once while the current threshold item remains intersecting.
+   * @param {string} reason - Exhaustion trigger.
+   * @returns {void}
+   */
+  _triggerLazyLoadExhausted (reason) {
+    const target = this._lazyLoadObservedTarget;
+    if (!target || this._lazyLoadExhaustedTarget === target) return;
+    this._lazyLoadExhaustedTarget = target;
+    this.trigger('lazyLoadExhausted', this._createLazyLoadDetail({ reason }));
+  }
+
+  /**
+   * Schedules one fallback visibility check per animation frame.
+   * @returns {void}
+   */
+  _scheduleLazyLoadFallbackCheck () {
+    if (this._lazyLoadFallbackFrame !== null) return;
+    const run = () => {
+      this._lazyLoadFallbackFrame = null;
+      this._checkLazyLoadFallback();
+    };
+    this._lazyLoadFallbackFrame = typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame(run)
+      : window.setTimeout(run, 16);
+  }
+
+  /**
+   * Checks whether the fallback threshold item intersects the configured scroll root.
+   * @returns {void}
+   */
+  _checkLazyLoadFallback () {
+    const target = this._lazyLoadObservedTarget;
+    if (!target || typeof target.getBoundingClientRect !== 'function') return;
+
+    const targetRect = target.getBoundingClientRect();
+    const rootRect = this._lazyLoadScrollContainer === window
+      ? { top: 0, bottom: window.innerHeight }
+      : this._lazyLoadScrollContainer.getBoundingClientRect();
+    const intersects = targetRect.bottom >= rootRect.top && targetRect.top <= rootRect.bottom;
+    this._handleLazyLoadIntersection(intersects, target);
+  }
+
+  /**
+   * Moves the configured lazy-load scroll root to the list start.
+   * @returns {void}
+   */
+  _scrollLazyLoadToStart () {
+    const container = this._lazyLoadScrollContainer;
+    if (!container) return;
+    if (container === window) {
+      const top = this.listContainer.getBoundingClientRect().top + (window.scrollY || window.pageYOffset || 0);
+      window.scrollTo({ top, left: window.scrollX || window.pageXOffset || 0, behavior: 'auto' });
+      return;
+    }
+    container.scrollTop = 0;
   }
 
   get reset () {
@@ -371,32 +759,39 @@ class ListJS {
 
   update () {
     const is = this.items;
+    const renderLimit = this._lazyLoadConfig ? this._lazyLoadLimit : this.page;
     this.visibleItems = [];
     this.matchingItems = [];
     this.templater.clear();
 
     const groupBy = ListJS._normalizeGroupBy(this.groupBy);
     if (groupBy.length) {
-      this._updateGrouped(is, groupBy[0]);
+      this._updateGrouped(is, groupBy[0], renderLimit);
     } else {
+      const frag = document.createDocumentFragment();
       for (let i = 0; i < is.length; i++) {
-        if (is[i].matching() && this.matchingItems.length + 1 >= this.i && this.visibleItems.length < this.page) {
-          is[i].show();
-          this.visibleItems.push(is[i]);
-          this.matchingItems.push(is[i]);
-        } else if (is[i].matching()) {
-          this.matchingItems.push(is[i]);
-          is[i].hide();
+        const item = is[i];
+        if (item.matching() && this.matchingItems.length + 1 >= this.i && this.visibleItems.length < renderLimit) {
+          this.templater.create(item);
+          this.templater._applyIterationPlaceholders(item);
+          frag.appendChild(item.elm);
+          this.visibleItems.push(item);
+          this.matchingItems.push(item);
+        } else if (item.matching()) {
+          this.matchingItems.push(item);
+          item.hide();
         } else {
-          is[i].hide();
+          item.hide();
         }
       }
+      this.list.appendChild(frag);
     }
+    this._refreshLazyLoadTrigger();
     this.trigger('updated');
     return this;
   }
 
-  _updateGrouped (items, groupBy) {
+  _updateGrouped (items, groupBy, renderLimit) {
     const frag = document.createDocumentFragment();
     const ctx = {
       now: new Date(),
@@ -410,7 +805,7 @@ class ListJS {
 
       const idx = this.matchingItems.length + 1;
       this.matchingItems.push(item);
-      if (idx < this.i || this.visibleItems.length >= this.page) continue;
+      if (idx < this.i || this.visibleItems.length >= renderLimit) continue;
 
       const groupInfo = this._getGroupForItem(item, groupBy, ctx);
       if (groupInfo) {
@@ -561,7 +956,11 @@ class ListJS {
   _buildSearch () {
     // search(str, [columns]?, customSearch?)
     const prepare = {
-      resetList: () => { this.i = 1; this.templater.clear(); },
+      resetList: () => {
+        this.i = 1;
+        if (this._lazyLoadConfig) this.resetLazyLoad({ update: false, scroll: true });
+        this.templater.clear();
+      },
       setOptions: args => {
         // str, cols | fn | cols+fn
         if (args.length === 2 && Array.isArray(args[1])) return { columns: args[1] };
@@ -677,6 +1076,7 @@ class ListJS {
     this.filter = fn => {
       this.trigger('filterStart');
       this.i = 1;
+      if (this._lazyLoadConfig) this.resetLazyLoad({ update: false, scroll: true });
       this.reset.filter();
 
       if (fn === undefined) {
@@ -749,6 +1149,7 @@ class ListJS {
 
       buttons.clear();
       buttons.setOrder(options);
+      if (this._lazyLoadConfig) this.resetLazyLoad({ update: false, scroll: true });
 
       const custom = options.sortFunction || this.sortFunction || null;
       const multi = options.order === 'desc' ? -1 : 1;
