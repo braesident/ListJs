@@ -5,7 +5,7 @@
   "type": "extension",
   "require": {
   },
-  "license": "proprietary",
+  "license": "MIT",
   "autoload": {
   },
   "authors": [
