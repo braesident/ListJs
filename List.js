@@ -1,6 +1,6 @@
 /* ListJS – Standalone ES Class (no bundler, no module.exports)
  * API: new ListJS(containerOrId, options = {}, values?)
- * Methods: add, remove, get, size, clear, show, reIndex, toJSON, on, off, search, filter, sort, update
+ * Methods: add, prepend, remove, removeBy, updateBy, upsert, get, size, clear, show, reIndex, toJSON, on, off, search, filter, sort, update
  * Events: 'updated', 'searchStart', 'searchComplete', 'filterStart', 'filterComplete', 'sortStart', 'sortComplete', 'parseComplete'
  */
 class ListJS {
@@ -134,6 +134,27 @@ class ListJS {
     return added;
   }
 
+  /**
+   * Adds one or more items at the beginning of the internal list order.
+   * @param {Object|Object[]} values - Row values to insert.
+   * @returns {Object[]|undefined} Inserted ListJS items.
+   */
+  prepend (values) {
+    if (!values || values.length === 0) return;
+    const addList = (Array.isArray(values) ? values : [ values ]);
+    const added = [];
+
+    for (let i = addList.length - 1; i >= 0; i--) {
+      const notCreate = this.items.length > this.page;
+      const it = new ListJS._Item(this, addList[i], undefined, notCreate);
+      this.items.unshift(it);
+      added.unshift(it);
+    }
+
+    this.update();
+    return added;
+  }
+
   show (i, page) {
     this.i = i;
     this.page = page;
@@ -153,6 +174,148 @@ class ListJS {
     }
     this.update();
     return found;
+  }
+
+  /**
+   * Updates the first item matching a value without forcing a full list rebuild by default.
+   * @param {string} valueName - Value key used to find the item.
+   * @param {*} value - Value to match.
+   * @param {Object} newValues - Values to merge into the existing item.
+   * @param {Object} options - Update behavior flags.
+   * @param {boolean} [options.update=false] - Rebuild the full list after changing the item.
+   * @param {boolean} [options.trigger=true] - Trigger the `updated` event when no full rebuild runs.
+   * @param {boolean} [options.notCreate=false] - Avoid creating a DOM element for hidden items.
+   * @param {number} [options.index] - Reposition the item to this zero-based index before rebuilding.
+   * @param {string} [options.position] - Reposition shortcut: `start` or `end`.
+   * @returns {Object|null} Updated ListJS item or null.
+   */
+  updateBy (valueName, value, newValues = {}, options = {}) {
+    const item = this.get(valueName, value)[0];
+    if (!item) {
+      return null;
+    }
+
+    const notCreate = options.notCreate === true;
+    item.values(newValues, notCreate);
+    this._positionItem(item, options);
+    if (options.update === true) {
+      this.update();
+    } else if (options.trigger !== false) {
+      this.trigger('updated');
+    }
+
+    return item;
+  }
+
+  /**
+   * Inserts or updates one item by a stable value.
+   * @param {string} valueName - Value key used to find the item.
+   * @param {*} value - Value to match.
+   * @param {Object} newValues - Values for the inserted or updated item.
+   * @param {Object} options - Upsert behavior flags.
+   * @param {boolean} [options.update=true] - Rebuild the full list after inserting or updating.
+   * @param {boolean} [options.trigger=true] - Trigger the `updated` event when no full rebuild runs.
+   * @param {boolean} [options.notCreate=false] - Avoid creating a DOM element for hidden items.
+   * @param {number} [options.index] - Insert or move the item to this zero-based index.
+   * @param {string} [options.position] - Insert or move shortcut: `start` or `end`.
+   * @returns {Object} Inserted or updated ListJS item.
+   */
+  upsert (valueName, value, newValues = {}, options = {}) {
+    const existing = this.get(valueName, value)[0];
+    if (existing) {
+      return this.updateBy(valueName, value, newValues, {
+        update: options.update !== false,
+        ...options
+      });
+    }
+
+    const notCreate = options.notCreate === true;
+    const item = new ListJS._Item(this, newValues, undefined, notCreate);
+    this.items.splice(this._resolveInsertIndex(options, this.items.length), 0, item);
+
+    if (options.update !== false) {
+      this.update();
+    } else if (options.trigger !== false) {
+      this.trigger('updated');
+    }
+
+    return item;
+  }
+
+  /**
+   * Removes matching items and optionally skips the immediate full list rebuild.
+   * @param {string} valueName - Value key used to find items.
+   * @param {*} value - Value to match.
+   * @param {Object} options - Removal behavior flags.
+   * @param {boolean} [options.update=true] - Rebuild the full list after removing items.
+   * @returns {number} Number of removed items.
+   */
+  removeBy (valueName, value, options = {}) {
+    let found = 0;
+    for (let i = 0; i < this.items.length; i++) {
+      if (this.items[i].values()[valueName] == value) {
+        this.templater.remove(this.items[i], options);
+        this.items.splice(i, 1);
+        i--;
+        found++;
+      }
+    }
+
+
+    if (options.update !== false) {
+      this.update();
+    } else if (options.trigger !== false && found > 0) {
+      this.trigger('updated');
+    }
+
+    return found;
+  }
+
+  /**
+   * Resolves an item insertion index from upsert options.
+   * @param {Object} options - Insert options.
+   * @param {number} fallback - Fallback index.
+   * @returns {number} Bounded insertion index.
+   */
+  _resolveInsertIndex (options = {}, fallback = this.items.length) {
+    let index = fallback;
+    if (options.position === 'start' || options.prepend === true) {
+      index = 0;
+    } else if (options.position === 'end' || options.append === true) {
+      index = this.items.length;
+    } else if (Number.isFinite(Number.parseInt(String(options.index ?? ''), 10))) {
+      index = Number.parseInt(String(options.index), 10);
+    }
+
+    return Math.max(0, Math.min(this.items.length, index));
+  }
+
+  /**
+   * Moves an existing item when positional upsert options are present.
+   * @param {Object} item - ListJS item to reposition.
+   * @param {Object} options - Position options.
+   * @returns {boolean} True when the item moved.
+   */
+  _positionItem (item, options = {}) {
+    const hasPosition = options.position === 'start'
+      || options.position === 'end'
+      || options.prepend === true
+      || options.append === true
+      || Number.isFinite(Number.parseInt(String(options.index ?? ''), 10));
+    if (!hasPosition) {
+      return false;
+    }
+
+    const currentIndex = this.items.indexOf(item);
+    if (currentIndex < 0) {
+      return false;
+    }
+
+    this.items.splice(currentIndex, 1);
+    const nextIndex = this._resolveInsertIndex(options, currentIndex);
+    this.items.splice(nextIndex, 0, item);
+
+    return nextIndex !== currentIndex;
   }
 
   get (valueName, value) {

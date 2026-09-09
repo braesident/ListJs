@@ -184,7 +184,11 @@ Hinweise:
 
 - `new ListJS(containerOrId, options = {}, values?)`
 - `add(values, callback?)` – Fügt Werte hinzu; optional async per Callback (Chunks).
+- `prepend(values)` – Fügt ein Objekt oder Array am Anfang ein und erhält dabei die Reihenfolge des Arrays. Gibt die eingefügten Items als Array zurück, bei leerer Eingabe `undefined`.
 - `remove(valueName, value, options?)` – Entfernt Items nach Wert.
+- `removeBy(valueName, value, options?)` – Entfernt alle Treffer; gibt deren Anzahl zurück. Der sofortige Listenaufbau ist optional.
+- `updateBy(valueName, value, newValues = {}, options = {})` – Ergänzt/überschreibt Werte des ersten Treffers; gibt das Item oder `null` zurück. Standardmäßig ohne vollständigen Listenaufbau.
+- `upsert(valueName, value, newValues = {}, options = {})` – Aktualisiert den ersten Treffer oder fügt ein Item hinzu; gibt dieses Item zurück. Baut standardmäßig die Liste neu auf.
 - `get(valueName, value)` – Gibt Items als Array zurück.
 - `size()` – Anzahl Items.
 - `clear()` – Entfernt alle Items aus DOM und Liste.
@@ -198,6 +202,55 @@ Hinweise:
 - `on(event, callback)` / `off(event, callback)`
 - `fuzzySearch(str, columns?)` – Fuzzy-Suche (wenn aktiviert).
 - `reset.search()` / `reset.filter()` – setzt nur Search/Filter-Flags zurück.
+
+### Items gezielt ändern und positionieren
+
+`updateBy`, `upsert` und `removeBy` suchen wie `get` per losem Vergleich (`==`).
+`newValues` wird mit den vorhandenen Werten zusammengeführt; nicht angegebene Felder bleiben erhalten.
+Beim Einfügen durch `upsert` muss der Suchschlüssel auch in `newValues` stehen:
+Er wird nicht automatisch aus `valueName` und `value` übernommen.
+
+```js
+const users = new ListJS('users', {
+  valueNames: [ 'name', 'email', { data: [ 'id' ] } ]
+});
+
+users.prepend([
+  { id: 1, name: 'Ada', email: 'ada@example.com' },
+  { id: 2, name: 'Linus', email: 'linus@example.com' }
+]);
+
+// Aktualisiert das einzelne Item ohne vollständigen Listenaufbau.
+users.updateBy('id', 1, { email: 'ada@new.example.com' });
+
+// Fügt ein Item ein oder aktualisiert es und verschiebt es an den Anfang.
+users.upsert('id', 3, {
+  id: 3, name: 'Grace', email: 'grace@example.com'
+}, { position: 'start' });
+
+// Mehrere Änderungen sammeln, anschließend einmal rendern.
+users.updateBy('id', 1, { name: 'Ada Lovelace' }, { trigger: false });
+users.removeBy('id', 2, { update: false, trigger: false });
+users.update();
+```
+
+Optionen:
+
+| Option | Verhalten |
+| --- | --- |
+| `update` | Vollständigen Listenaufbau ausführen. Default: `false` bei `updateBy`, `true` bei `upsert` und `removeBy`. |
+| `trigger` | Ohne vollständigen Listenaufbau trotzdem `updated` auslösen (default: `true`). Bei `removeBy` nur, wenn etwas entfernt wurde. Mit Listenaufbau löst `update()` das Event unabhängig von dieser Option aus. |
+| `notCreate` | Für `updateBy`/`upsert`: Mit `true` kein fehlendes DOM-Element vorzeitig erstellen. Ein anschließendes `update()` erstellt sichtbare Items trotzdem. |
+| `position` | Für `updateBy`/`upsert`: `'start'` oder `'end'` verschiebt das Item bzw. bestimmt seine Einfügeposition. |
+| `index` | Für `updateBy`/`upsert`: Zielindex ab `0`, begrenzt auf den gültigen Bereich. `position` hat Vorrang. |
+| `prepend` / `append` | Für `updateBy`/`upsert`: `true` als Kurzform für die Position am Anfang bzw. Ende. |
+
+Ohne vollständigen Listenaufbau werden die sichtbare Reihenfolge, Gruppierung sowie
+`visibleItems` und `matchingItems` nicht neu aufgebaut. Positionsänderungen werden erst
+beim nächsten `update()` sichtbar; `removeBy` entfernt betroffene DOM-Elemente sofort.
+Aktive Such-/Filterbedingungen und Sortierungen werden durch diese Methoden oder
+`update()` nicht erneut ausgeführt. Bei relevanten Wertänderungen `search`, `filter`
+bzw. `sort` erneut aufrufen.
 
 ## Events
 
