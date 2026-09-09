@@ -3,6 +3,17 @@
 Kleine, framework-unabhängige Liste mit Suche, Filter, Sortierung, Pagination, progressivem Lazy Loading und optionaler Fuzzy-Suche.
 Direkt im Browser nutzbar, ohne Bundler oder module.exports.
 
+## Herkunft und Lizenz
+
+Dieses Projekt basiert auf [List.js von Jonny Strömberg (javve)](https://github.com/javve/list.js)
+und wird von Sebastian Braesicke als eigenständige Variante weiterentwickelt.
+Zu den Erweiterungen gehören unter anderem progressives Lazy Loading, zusätzliche
+Methoden zur Item-Verwaltung und Gruppierung mit Zwischenüberschriften.
+
+Der ursprüngliche Code und die Weiterentwicklungen stehen unter der [MIT-Lizenz](LICENSE).
+Die Copyright-Hinweise des Ursprungsprojekts und für die eigenen Änderungen sind
+in der Lizenzdatei enthalten.
+
 ## Schnellstart
 
 Einfach `List.js` einbinden und eine Container-Struktur bereitstellen:
