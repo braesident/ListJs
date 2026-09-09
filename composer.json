@@ -1,13 +1,11 @@
 {
   "name": "braesident/listjs",
-  "description": "The nicest lsit js clone ever",
+  "description": "The nicest list js clone ever",
   "homepage": "https://www.exunova.de",
   "type": "extension",
-  "require": {
-  },
+  "require": {},
   "license": "MIT",
-  "autoload": {
-  },
+  "autoload": {},
   "authors": [
     {
       "name": "Sebastian Braesicke",
